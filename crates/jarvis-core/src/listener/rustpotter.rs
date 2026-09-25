@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use once_cell::sync::OnceCell;
 use rustpotter::Rustpotter;
 
-use crate::config;
+use crate::{config, APP_DIR};
 
 // store rustpotter instance
 static RUSTPOTTER: OnceCell<Mutex<Rustpotter>> = OnceCell::new();
@@ -15,23 +15,14 @@ pub fn init() -> Result<(), ()> {
     match Rustpotter::new(&rustpotter_config) {
         Ok(mut rinstance) => {
             // success
-            // wake word files list
-            // @TODO. Make it configurable via GUI for custom user voice.
-            let rustpotter_wake_word_files: [&str; 1] = [
-                "resources/rustpotter/jarvis-default.rpw",
-                // "rustpotter/jarvis-community-1.rpw",
-                // "rustpotter/jarvis-community-2.rpw",
-                // "rustpotter/jarvis-community-3.rpw",
-                // "rustpotter/jarvis-community-4.rpw",
-                // "rustpotter/jarvis-community-5.rpw",
-            ];
-
-            // load wake word files
-            for rpw in rustpotter_wake_word_files {
-                // @TODO: Change wakeword key to something else?
-                if let Err(e) = rinstance.add_wakeword_from_file(rpw, rpw) {
-                    error!("Failed to load wakeword file '{}': {}", rpw, e);
-                }
+            let model_path = APP_DIR.join("resources/rustpotter/terra.rpw");
+            if !model_path.is_file() {
+                return Err(());
+            }
+            let model_path = model_path.to_string_lossy().into_owned();
+            if let Err(e) = rinstance.add_wakeword_from_file(&model_path, "terra") {
+                error!("Failed to load Terra wakeword file '{}': {}", model_path, e);
+                return Err(());
             }
 
             // store

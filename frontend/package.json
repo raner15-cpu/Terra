@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "svelte-check --ignore '.routify' --no-tsconfig && vite build",
+    "build": "routify build && svelte-check --ignore '.routify' --no-tsconfig && vite build",
     "preview": "vite preview",
-    "check": "svelte-check --ignore '.routify' --tsconfig ./tsconfig.json",
+    "check": "routify build && svelte-check --ignore '.routify' --no-tsconfig",
     "tauri": "tauri"
   },
   "dependencies": {

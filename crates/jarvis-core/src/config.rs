@@ -91,7 +91,7 @@ pub const SUPPORT_PATREON_LINK: Option<&str> = Some("https://www.patreon.com/c/p
    Tray.
 */
 pub const TRAY_ICON: &str = "32x32.png";
-pub const TRAY_TOOLTIP: &str = "Jarvis Voice Assistant";
+pub const TRAY_TOOLTIP: &str = "Terra — голосовой помощник";
 
 // RUSPOTTER
 pub const RUSPOTTER_MIN_SCORE: f32 = 0.62;
@@ -142,7 +142,7 @@ pub const DEFAULT_SENSITIVITY: f32 = 1.0;
 // pub const VOSK_MODEL_PATH: &str = const_concat!(PUBLIC_PATH, "/vosk/model_small");
 pub const VOSK_MODELS_PATH: &str = "resources/vosk";
 pub const VOSK_MODEL_PATH: &str = "resources/vosk/model_small";
-pub const VOSK_FETCH_PHRASE: &str = "джарвис";
+pub const VOSK_FETCH_PHRASE: &str = "терра";
 pub const VOSK_MIN_RATIO: f64 = 70.0;
 
 // 0.7 lenient, expect false positives
@@ -189,7 +189,7 @@ pub const CMS_WAIT_DELAY: std::time::Duration = std::time::Duration::from_secs(1
 
 // pub const ASSISTANT_GREET_PHRASES: [&str; 3] = ["greet1", "greet2", "greet3"];
 // pub const ASSISTANT_PHRASES_TBR: [&str; 17] = [
-//     "джарвис",
+//     "терра",
 //     "сэр",
 //     "слушаю сэр",
 //     "всегда к услугам",
@@ -212,48 +212,45 @@ pub const CMS_WAIT_DELAY: std::time::Duration = std::time::Duration::from_secs(1
 
 pub fn get_wake_phrases(lang: &str) -> &'static [&'static str] {
     match lang {
-        "ru" => &["джарвис", "джервис", "гарвис", "джарви", "гарви"],
-        "ua" => &["джарвіс", "джервіс"],
-        "en" => &["jarvis", "jervis"],
-        _ => &["jarvis"],
+        "ru" => &["терра", "тера"],
+        "ua" => &["терра", "тера"],
+        "en" => &["terra", "tera"],
+        _ => &["terra"],
     }
 }
 
 pub fn get_phrases_to_remove(lang: &str) -> &'static [&'static str] {
     match lang {
         "ru" => &[
-            "джарвис", "джервис", "гарвис", "джарви", "гарви",
+            "терра", "тера",
             "сэр", "слушаю сэр", "всегда к услугам",
             "произнеси", "ответь", "покажи", "скажи", "давай",
             "да сэр", "к вашим услугам сэр", "загружаю сэр",
         ],
         "ua" => &[
-            "джарвіс", "джервіс", "сер", "слухаю сер", "завжди до послуг",
+            "терра", "тера", "сер", "слухаю сер", "завжди до послуг",
             "скажи", "покажи", "відповідай", "давай",
             "так сер", "до ваших послуг сер",
         ],
         "en" => &[
-            "jarvis", "jervis", "sir", "yes sir", "at your service",
+            "terra", "tera", "sir", "yes sir", "at your service",
             "please", "say", "show", "tell", "hey",
         ],
-        _ => &["jarvis"],
+        _ => &["terra"],
     }
 }
 
 pub fn get_wake_grammar(lang: &str) -> &'static [&'static str] {
     match lang {
         "ru" => &[
-            "джарвис", "[unk]", "джон", "джони", "джей",
-            "джонстон", "привет", "давай",
+            "терра", "тера", "[unk]",
         ],
         "ua" => &[
-            "джарвіс", "[unk]", "джон", "джоні", "джей",
-            "привіт", "давай",
+            "терра", "тера", "[unk]",
         ],
         "en" => &[
-            "jarvis", "[unk]", "john", "johnny", "jay",
-            "hello", "hey", "hi",
+            "terra", "tera", "[unk]",
         ],
-        _ => &["jarvis", "[unk]"],
+        _ => &["terra", "[unk]"],
     }
 }

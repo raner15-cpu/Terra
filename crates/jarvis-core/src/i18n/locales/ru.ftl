@@ -1,12 +1,12 @@
 # APP INFO
-app-name = JARVIS
+app-name = TERRA
 app-description = Голосовой ассистент
 
 # TRAY MENU
 tray-restart = Перезапустить
 tray-settings = Настройки
 tray-exit = Выход
-tray-tooltip = JARVIS - Голосовой ассистент
+tray-tooltip = TERRA — голосовой ассистент
 tray-language = Язык
 tray-voice = Голос
 tray-wake-word = Движок wake-word
@@ -19,7 +19,7 @@ header-commands = КОМАНДЫ
 header-settings = НАСТРОЙКИ
 
 # SEARCH
-search-placeholder = Введите команду вручную или произнесите «Джарвис» ...
+search-placeholder = Введите команду вручную или произнесите «Терра» ...
 
 # MAIN PAGE
 assistant-not-running = АССИСТЕНТ НЕ ЗАПУЩЕН

@@ -578,8 +578,8 @@ $voice-max-visible: 3;
     }
     
     &.selected {
-        background: rgba(82, 254, 254, 0.1);
-        border-color: rgba(82, 254, 254, 0.4);
+        background: rgba(50, 150, 255, 0.1);
+        border-color: rgba(50, 150, 255, 0.4);
     }
 }
 

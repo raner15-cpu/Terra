@@ -56,11 +56,11 @@
 <header id="header" class="header">
     <div class="header-left">
         <div class="logo">
-            <a href="/" title="JARVIS">
-                <img src="/media/128x128.png" alt="Jarvis Logo" />
+            <a href="/" title="Terra">
+                <img src="/media/terra-mark.svg" alt="Terra Logo" />
             </a>
             <div class="logo-text">
-                <span class="logo-title"><a href="/" id="jarvis-logo">&nbsp;</a></span>
+                <span class="logo-title"><a href="/" id="terra-logo">TERRA</a></span>
                 <span class="logo-version"><small>v</small>{appVersion} <span class="v-badge">BETA</span></span>
             </div>
         </div>
@@ -70,6 +70,10 @@
         <button class="header-btn" on:click={() => $goto('/commands')}>
             <span class="btn-text">{t('header-commands')}</span>
             <span class="btn-badge purple">{commandsCount}+</span>
+        </button>
+
+        <button class="header-btn" on:click={() => $goto('/chat')}>
+            <span class="btn-text">Текстовый чат</span>
         </button>
         
         <button class="header-btn" on:click={() => $goto('/settings')}>
@@ -169,13 +173,13 @@
         text-align: left;
 
         &:hover {
-            background: rgba(82, 254, 254, 0.1);
+            background: rgba(50, 150, 255, 0.1);
             color: #ffffff;
         }
 
         &.active {
-            background: rgba(82, 254, 254, 0.15);
-            color: #52fefe;
+            background: rgba(50, 150, 255, 0.15);
+            color: #3296ff;
         }
     }
 

@@ -1,4 +1,16 @@
-# JARVIS Voice Assistant (this readme is outdated)
+# Terra — локальный голосовой ассистент
+
+Terra is an experimental fork of Jarvis. The first prototype keeps the inherited Rust/Tauri desktop shell and adds a blue interface, the Russian wake phrase **«Терра»**, and a text-only local-model chat.
+
+## Terra prototype status
+
+- The text chat uses an Ollama server at `http://127.0.0.1:11434`; Ollama and at least one local model must be installed and running separately.
+- The chat page lists models already installed in Ollama. No cloud model API key is used by this chat.
+- Chat turns exist only in the current page session. They are not written to disk; persistent memory is intentionally deferred.
+- The text chat does not yet access files, run commands, listen to speech, or speak responses.
+- Wake-word detection uses the Vosk grammar for Terra. If the saved wake-word engine is Rustpotter but no trained `resources/rustpotter/terra.rpw` profile is present, the app falls back to Vosk.
+
+The remaining sections describe inherited upstream components and may not reflect the Terra prototype.
 
 ![We are NOT limited by the technology of our time!](poster.jpg)
 

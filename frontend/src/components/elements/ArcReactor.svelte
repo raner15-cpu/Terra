@@ -9,7 +9,7 @@
     }[$jarvisState] || 'disconnected'
 </script>
 
-<div id="arc-reactor" class="reactor-container {stateClass} arc-white">
+<div id="arc-reactor" class="reactor-container {stateClass} arc-blue">
     <div class="reactor-container-inner circle abs-center">
         <ul class="marks">
             {#each Array(60) as _, i}
@@ -60,11 +60,11 @@
 
     // [ DEFAULT THEME - CYAN ]
     .reactor-container {
-        --arc-color: 2, 254, 255;           // RGB values for easy rgba()
-        --arc-glow: #52fefe;
-        --arc-glow-rgb: 82, 254, 254;
-        --arc-core-border: #1b4e5f;
-        --arc-core-bg: #073c4b;
+        --arc-color: 50, 150, 255;           // RGB values for easy rgba()
+        --arc-glow: #3296ff;
+        --arc-glow-rgb: 50, 150, 255;
+        --arc-core-border: #1b3c5f;
+        --arc-core-bg: #072a4b;
 
         width: 300px;
         height: 300px;

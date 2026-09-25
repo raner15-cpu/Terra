@@ -73,7 +73,7 @@
         left: 50%;
         transform: translateX(-50%);
         font-size: 0.75rem;
-        color: rgba(82, 254, 254, 0.8);
+        color: rgba(50, 150, 255, 0.8);
         white-space: nowrap;
         animation: fadeIn 0.2s ease;
     }

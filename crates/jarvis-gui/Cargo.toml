@@ -23,6 +23,7 @@ log.workspace = true
 simple-log = "2.4"
 serde.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
 platform-dirs.workspace = true
 parking_lot.workspace = true
 

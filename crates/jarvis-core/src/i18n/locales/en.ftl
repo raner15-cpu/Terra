@@ -1,12 +1,12 @@
 # ### APP INFO
-app-name = JARVIS
+app-name = TERRA
 app-description = Voice Assistant
 
 # ### TRAY MENU
 tray-restart = Restart
 tray-settings = Settings
 tray-exit = Exit
-tray-tooltip = JARVIS - Voice Assistant
+tray-tooltip = TERRA — Voice Assistant
 tray-language = Language
 tray-voice = Voice
 tray-wake-word = Wake Word Engine
@@ -19,7 +19,7 @@ header-commands = COMMANDS
 header-settings = SETTINGS
 
 # ### SEARCH
-search-placeholder = Enter a command manually or say «Jarvis» ...
+search-placeholder = Enter a command manually or say «Terra» ...
 
 # ### MAIN PAGE
 assistant-not-running = ASSISTANT NOT RUNNING
