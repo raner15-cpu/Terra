@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+set "TERRA_NATIVE_LIB=%CD%\lib\windows\amd64"
+set "PATH=%TERRA_NATIVE_LIB%;%USERPROFILE%\.cargo\bin;%PATH%"
 set "TEMP=%LOCALAPPDATA%\Temp"
 set "TMP=%TEMP%"
 if not exist "%TEMP%" mkdir "%TEMP%"
@@ -39,6 +40,12 @@ if errorlevel 1 goto :failed
 echo Building the voice-assistant runtime...
 cargo build -p jarvis-app
 if errorlevel 1 goto :failed
+
+echo Preparing voice-assistant runtime libraries...
+if not exist "target\debug" goto :failed
+copy /Y "lib\windows\amd64\*.dll" "target\debug\" >nul
+if errorlevel 1 goto :failed
+if not exist "target\debug\libvosk.dll" goto :failed
 
 echo Starting Terra. Keep this window open while using the app.
 pushd "crates\jarvis-gui"
