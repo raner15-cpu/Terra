@@ -6,13 +6,13 @@
   "build": {
     "beforeDevCommand": {
       "cwd": "../../frontend",
-      "script": "npm run dev"
+      "script": "npm run dev -- --host 127.0.0.1"
     },
     "beforeBuildCommand": {
       "cwd": "../../frontend",
       "script": "npm run build"
     },
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../../frontend/dist/client"
   },
   "app": {
