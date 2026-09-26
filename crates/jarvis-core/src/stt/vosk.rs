@@ -14,6 +14,7 @@ static WAKE_RECOGNIZER: OnceCell<Mutex<Recognizer>> = OnceCell::new();
 static SPEECH_RECOGNIZER: OnceCell<Mutex<Recognizer>> = OnceCell::new();
 static SPEECH_ACCUMULATOR: OnceCell<Mutex<SpeechAccumulator>> = OnceCell::new();
 static CONVERSATION_ENDPOINT: AtomicBool = AtomicBool::new(false);
+static HINT_WARNED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct SpeechAccumulator {
@@ -24,7 +25,13 @@ struct SpeechAccumulator {
     /// Frames of the current utterance that contained speech.
     speech_frames: u32,
     noise_floor: f32,
+    /// Loudness of actual speech, used to separate speech from a loud noise floor.
+    speech_level: f32,
     frames_seen: u64,
+    /// How often the application VAD claimed "voice". A VAD that always says
+    /// "voice" (loud mic, high gain) carries no information and must be ignored.
+    hint_frames: u64,
+    hint_voice_frames: u64,
 }
 
 const SPEECH_SAMPLE_RATE: f32 = 16_000.0;
@@ -35,7 +42,9 @@ const COMMAND_END_SILENCE_SECONDS: f32 = 0.9;
 /// has to be clearly longer than a natural mid-sentence pause.
 const CONVERSATION_END_SILENCE_SECONDS: f32 = 2.2;
 /// Safety cap: close the utterance even if silence is never detected (noisy mic).
-const COMMAND_MAX_UTTERANCE_SECONDS: f32 = 15.0;
+/// Must stay clearly below config::CMS_WAIT_DELAY, otherwise the command loop
+/// times out at the same moment and the recognized text is thrown away.
+const COMMAND_MAX_UTTERANCE_SECONDS: f32 = 8.0;
 const CONVERSATION_MAX_UTTERANCE_SECONDS: f32 = 60.0;
 /// A turn shorter than this is ignored (door slams, coughs, mic pops).
 const MIN_SPEECH_SECONDS: f32 = 0.35;
@@ -45,6 +54,13 @@ const MIN_SPEECH_RMS: f32 = 45.0;
 const NOISE_FLOOR_SPEECH_FACTOR: f32 = 2.2;
 /// Lowest noise floor estimate we allow (keeps the factor meaningful on clean mics).
 const NOISE_FLOOR_MIN: f32 = 8.0;
+/// Speech is expected to be at least this much louder than the noise floor for
+/// the loudness-based split to be trusted.
+const MIN_SPEECH_TO_NOISE_RATIO: f32 = 2.5;
+/// The application VAD is ignored once it reports "voice" for this share of frames.
+const HINT_USELESS_RATIO: f64 = 0.95;
+/// ...but only after enough frames to judge it (about 10 seconds).
+const HINT_MIN_FRAMES: u64 = 300;
 /// Debug throttling: log recognizer state roughly once per second.
 const DEBUG_LOG_EVERY_FRAMES: u64 = 31;
 
@@ -132,8 +148,10 @@ pub fn conversation_endpointing() -> bool {
 /// Feed one frame into the command/conversation recognizer.
 ///
 /// `voice_hint` is the decision of the application VAD for the same frame. It is
-/// combined (logical OR) with an adaptive, noise-floor based detector, so a noisy
-/// microphone can neither keep the utterance open forever nor cut it short.
+/// only trusted while it actually discriminates: on a loud mic it reports "voice"
+/// on every frame, and blindly trusting it kept every utterance open forever.
+/// Endpointing itself is loudness-based (noise floor vs. speech level), so pauses
+/// stay detectable no matter how loud the noise floor is.
 ///
 /// An utterance is closed only by real silence (or by a long safety cap). It is
 /// never closed just because Vosk stopped producing new words - that used to cut
@@ -160,9 +178,58 @@ pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Opti
     }
     accumulator.noise_floor = accumulator.noise_floor.max(NOISE_FLOOR_MIN);
 
-    let adaptive_threshold =
-        (accumulator.noise_floor * NOISE_FLOOR_SPEECH_FACTOR).max(MIN_SPEECH_RMS);
-    let is_speech = rms >= adaptive_threshold || voice_hint.unwrap_or(false);
+    // speech level: rises fast, decays slowly
+    if accumulator.speech_level <= 0.0 {
+        accumulator.speech_level = rms;
+    } else if rms > accumulator.speech_level {
+        accumulator.speech_level = accumulator.speech_level * 0.7 + rms * 0.3;
+    } else {
+        accumulator.speech_level = accumulator.speech_level * 0.995 + rms * 0.005;
+    }
+
+    // Once loud speech and quiet pauses are clearly separated, split them by
+    // loudness instead of by an absolute threshold. This is what makes pauses
+    // detectable on a mic whose noise floor is louder than any fixed threshold.
+    let ratio = accumulator.speech_level / accumulator.noise_floor;
+    let adaptive_threshold = if ratio >= MIN_SPEECH_TO_NOISE_RATIO {
+        let midpoint = (accumulator.noise_floor * accumulator.speech_level).sqrt();
+        let low = accumulator.noise_floor * 1.5;
+        let high = accumulator.speech_level * 0.5;
+        if low <= high {
+            midpoint.max(low).min(high)
+        } else {
+            midpoint
+        }
+    } else {
+        (accumulator.noise_floor * NOISE_FLOOR_SPEECH_FACTOR).max(MIN_SPEECH_RMS)
+    };
+
+    // Judge the application VAD before trusting it: a hint that is always "voice"
+    // used to keep every utterance open forever, so Terra only ever heard the
+    // wake word and never a command.
+    accumulator.hint_frames += 1;
+    if voice_hint.unwrap_or(false) {
+        accumulator.hint_voice_frames += 1;
+    }
+    let hint_share = if accumulator.hint_frames > 0 {
+        accumulator.hint_voice_frames as f64 / accumulator.hint_frames as f64
+    } else {
+        0.0
+    };
+    let hint_usable =
+        accumulator.hint_frames < HINT_MIN_FRAMES || hint_share < HINT_USELESS_RATIO;
+
+    if !hint_usable && !HINT_WARNED.swap(true, Ordering::Relaxed) {
+        warn!(
+            "Application VAD reports voice in {:.0}% of frames (mic is loud or gain is high). \
+Ignoring it and using loudness-based endpointing (floor {:.0}, speech level {:.0}).",
+            hint_share * 100.0,
+            accumulator.noise_floor,
+            accumulator.speech_level,
+        );
+    }
+
+    let is_speech = rms >= adaptive_threshold || (hint_usable && voice_hint.unwrap_or(false));
 
     if is_speech {
         accumulator.silence_frames = 0;
@@ -203,10 +270,11 @@ pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Opti
 
     if accumulator.frames_seen % DEBUG_LOG_EVERY_FRAMES == 0 {
         debug!(
-            "STT frame: mode={} rms={:.0} floor={:.0} thr={:.0} speech={} silence={}/{} turn={}f speech_frames={} segments={}",
+            "STT frame: mode={} rms={:.0} floor={:.0} level={:.0} thr={:.0} speech={} silence={}/{} turn={}f speech_frames={} segments={} vad_hint={:.0}%{}",
             if conversation { "conversation" } else { "command" },
             rms,
             accumulator.noise_floor,
+            accumulator.speech_level,
             adaptive_threshold,
             is_speech,
             accumulator.silence_frames,
@@ -214,6 +282,8 @@ pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Opti
             accumulator.utterance_frames,
             accumulator.speech_frames,
             accumulator.segments.len(),
+            hint_share * 100.0,
+            if hint_usable { "" } else { " (ignored)" },
         );
     }
 
