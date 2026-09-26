@@ -31,7 +31,7 @@ Start-Terra.bat
 
 Положи в папку из таблицы выше:
 
-- `whisper-cli.exe` и его DLL из [релиза whisper.cpp](https://github.com/ggml-org/whisper.cpp/releases) (`whisper-bin-x64.zip`);
+- `whisper-cli.exe` и его DLL из архива `whisper-bin-x64.zip`. Важно: у стабильных тегов (`v1.9.x`) файлов нет вообще, Windows-сборки выкладывают только в build-теги вида `b5130` — [список релизов](https://github.com/ggml-org/whisper.cpp/releases);
 - модель [ggml-small.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin).
 
 Или запусти установщик отдельно:
@@ -49,3 +49,9 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-whisper.ps1 -Target "D:\T
 - `whisper_prompt` — подсказка со словарём для редких слов и терминов.
 
 Если бинарника или модели нет, Terra один раз покажет причину при старте разговора и продолжит работать на тексте Vosk — диалог не ломается.
+
+## Если установка сорвалась
+
+Установщик перебирает несколько архивов: сначала `whisper-bin-x64.zip` из самого свежего build-тега, затем BLAS-сборку, затем закреплённую заведомо рабочую версию. Каждый архив проверяется на наличие `whisper-cli.exe` — если его нет, берётся следующий. Модель и бинарник ставятся независимо, поэтому повторный запуск докачивает только то, чего не хватает.
+
+Запустить установку повторно можно просто перезапуском `Start-Terra.bat`.
