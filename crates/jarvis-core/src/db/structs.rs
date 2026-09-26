@@ -42,6 +42,11 @@ pub struct Settings {
     pub whisper_model: String,
     #[serde(default)]
     pub whisper_exe: String,
+    /// Empty = follow the UI language. Use "auto" for mixed-language speech.
+    #[serde(default)]
+    pub whisper_language: String,
+    #[serde(default)]
+    pub whisper_prompt: String,
 
     pub api_keys: ApiKeys,
 }
@@ -74,6 +79,8 @@ impl Settings {
             "whisper_enabled"           => Some(self.whisper_enabled.to_string()),
             "whisper_model"             => Some(self.whisper_model.clone()),
             "whisper_exe"               => Some(self.whisper_exe.clone()),
+            "whisper_language"          => Some(self.whisper_language.clone()),
+            "whisper_prompt"            => Some(self.whisper_prompt.clone()),
             "api_key__picovoice"        => Some(self.api_keys.picovoice.clone()),
             "api_key__openai"           => Some(self.api_keys.openai.clone()),
             _ => None,
@@ -146,6 +153,12 @@ impl Settings {
             "whisper_exe" => {
                 self.whisper_exe = val.to_string();
             }
+            "whisper_language" => {
+                self.whisper_language = val.to_string();
+            }
+            "whisper_prompt" => {
+                self.whisper_prompt = val.to_string();
+            }
             "api_key__picovoice" => {
                 self.api_keys.picovoice = val.to_string();
             }
@@ -176,6 +189,8 @@ impl Settings {
             "whisper_enabled",
             "whisper_model",
             "whisper_exe",
+            "whisper_language",
+            "whisper_prompt",
             "api_key__picovoice",
             "api_key__openai",
         ]
@@ -209,6 +224,8 @@ impl Default for Settings {
             whisper_enabled: config::WHISPER_ENABLED_BY_DEFAULT,
             whisper_model: String::new(),
             whisper_exe: String::new(),
+            whisper_language: String::new(),
+            whisper_prompt: String::new(),
 
             api_keys: ApiKeys {
                 picovoice: String::from(""),

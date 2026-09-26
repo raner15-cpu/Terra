@@ -1,6 +1,7 @@
 use once_cell::sync::OnceCell;
 use vosk::{DecodingState, Recognizer};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
 
 use crate::{vosk_models, i18n, config, models};
@@ -12,22 +13,32 @@ static VOSK_MODEL: OnceCell<Arc<VoskModel>> = OnceCell::new();
 static WAKE_RECOGNIZER: OnceCell<Mutex<Recognizer>> = OnceCell::new();
 static SPEECH_RECOGNIZER: OnceCell<Mutex<Recognizer>> = OnceCell::new();
 static SPEECH_ACCUMULATOR: OnceCell<Mutex<SpeechAccumulator>> = OnceCell::new();
+static CONVERSATION_ENDPOINT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct SpeechAccumulator {
     segments: Vec<String>,
     silence_frames: u32,
-    frames_since_segment: u32,
+    /// Frames since the current utterance started accumulating audio.
+    utterance_frames: u32,
+    /// Frames of the current utterance that contained speech.
+    speech_frames: u32,
     noise_floor: f32,
     frames_seen: u64,
 }
 
 const SPEECH_SAMPLE_RATE: f32 = 16_000.0;
 const SPEECH_FRAME_LENGTH: f32 = 512.0;
-/// How long the user has to stay quiet before we treat the utterance as finished.
-const UTTERANCE_END_SILENCE_SECONDS: f32 = 0.9;
-/// Hard flush: Vosk already finalized text and nothing new arrived for this long.
-const UTTERANCE_FLUSH_SECONDS: f32 = 1.8;
+/// Quiet time that ends a command (short: commands are single phrases).
+const COMMAND_END_SILENCE_SECONDS: f32 = 0.9;
+/// Quiet time that ends a conversation turn. People pause while thinking, so this
+/// has to be clearly longer than a natural mid-sentence pause.
+const CONVERSATION_END_SILENCE_SECONDS: f32 = 2.2;
+/// Safety cap: close the utterance even if silence is never detected (noisy mic).
+const COMMAND_MAX_UTTERANCE_SECONDS: f32 = 15.0;
+const CONVERSATION_MAX_UTTERANCE_SECONDS: f32 = 60.0;
+/// A turn shorter than this is ignored (door slams, coughs, mic pops).
+const MIN_SPEECH_SECONDS: f32 = 0.35;
 /// Absolute minimum RMS that may be treated as speech, regardless of noise floor.
 const MIN_SPEECH_RMS: f32 = 45.0;
 /// A frame counts as speech when it is this much louder than the measured noise floor.
@@ -109,16 +120,33 @@ pub fn recognize_speech(data: &[i16]) -> Option<String> {
     recognize_speech_with_vad(data, None)
 }
 
+/// Switch endpointing between short command phrases and long conversation turns.
+pub fn set_conversation_endpointing(active: bool) {
+    CONVERSATION_ENDPOINT.store(active, Ordering::Relaxed);
+}
+
+pub fn conversation_endpointing() -> bool {
+    CONVERSATION_ENDPOINT.load(Ordering::Relaxed)
+}
+
 /// Feed one frame into the command/conversation recognizer.
 ///
 /// `voice_hint` is the decision of the application VAD for the same frame. It is
 /// combined (logical OR) with an adaptive, noise-floor based detector, so a noisy
-/// microphone can no longer keep the utterance open forever. That bug made Terra
-/// react to the wake word but never return a command.
+/// microphone can neither keep the utterance open forever nor cut it short.
+///
+/// An utterance is closed only by real silence (or by a long safety cap). It is
+/// never closed just because Vosk stopped producing new words - that used to cut
+/// people off mid-sentence on hard or unknown vocabulary.
+///
+/// In conversation mode the result may be an empty string: it signals "the turn is
+/// over, the audio is yours", which lets Whisper transcribe speech that the Vosk
+/// command model could not decode at all.
 pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Option<String> {
     let mut recognizer = SPEECH_RECOGNIZER.get()?.lock();
     let mut accumulator = SPEECH_ACCUMULATOR.get()?.lock();
 
+    let conversation = conversation_endpointing();
     let rms = frame_rms(data);
     accumulator.frames_seen += 1;
 
@@ -138,12 +166,13 @@ pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Opti
 
     if is_speech {
         accumulator.silence_frames = 0;
+        accumulator.speech_frames += 1;
     } else {
         accumulator.silence_frames += 1;
     }
 
-    if !accumulator.segments.is_empty() {
-        accumulator.frames_since_segment += 1;
+    if is_speech || accumulator.speech_frames > 0 {
+        accumulator.utterance_frames += 1;
     }
 
     if let Ok(DecodingState::Finalized) = recognizer.accept_waveform(data) {
@@ -156,44 +185,62 @@ pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Opti
             if !text.is_empty() && text != "[unk]" {
                 debug!("STT segment finalized: '{}'", text);
                 accumulator.segments.push(text);
-                accumulator.frames_since_segment = 0;
             }
         }
     }
 
-    let silence_threshold = seconds_to_frames(UTTERANCE_END_SILENCE_SECONDS);
-    let flush_threshold = seconds_to_frames(UTTERANCE_FLUSH_SECONDS);
+    let silence_threshold = seconds_to_frames(if conversation {
+        CONVERSATION_END_SILENCE_SECONDS
+    } else {
+        COMMAND_END_SILENCE_SECONDS
+    });
+    let max_utterance_frames = seconds_to_frames(if conversation {
+        CONVERSATION_MAX_UTTERANCE_SECONDS
+    } else {
+        COMMAND_MAX_UTTERANCE_SECONDS
+    });
+    let min_speech_frames = seconds_to_frames(MIN_SPEECH_SECONDS);
 
     if accumulator.frames_seen % DEBUG_LOG_EVERY_FRAMES == 0 {
         debug!(
-            "STT frame: rms={:.0} floor={:.0} thr={:.0} speech={} silence={}/{} pending_segments={} since_segment={}",
+            "STT frame: mode={} rms={:.0} floor={:.0} thr={:.0} speech={} silence={}/{} turn={}f speech_frames={} segments={}",
+            if conversation { "conversation" } else { "command" },
             rms,
             accumulator.noise_floor,
             adaptive_threshold,
             is_speech,
             accumulator.silence_frames,
             silence_threshold,
+            accumulator.utterance_frames,
+            accumulator.speech_frames,
             accumulator.segments.len(),
-            accumulator.frames_since_segment,
         );
     }
 
-    let ended_by_silence =
-        accumulator.silence_frames >= silence_threshold && !accumulator.segments.is_empty();
-    let ended_by_timeout =
-        accumulator.frames_since_segment >= flush_threshold && !accumulator.segments.is_empty();
+    let heard_enough = accumulator.speech_frames >= min_speech_frames;
+    let has_text = !accumulator.segments.is_empty();
+    // in conversation mode the audio alone is enough: Whisper will decode it
+    let has_material = has_text || (conversation && heard_enough);
 
-    if ended_by_silence || ended_by_timeout {
+    let ended_by_silence = accumulator.silence_frames >= silence_threshold && has_material;
+    let ended_by_cap = accumulator.utterance_frames >= max_utterance_frames && has_material;
+
+    if ended_by_silence || ended_by_cap {
         let utterance = accumulator.segments.join(" ").trim().to_string();
+        let turn_seconds =
+            accumulator.utterance_frames as f32 * SPEECH_FRAME_LENGTH / SPEECH_SAMPLE_RATE;
         accumulator.segments.clear();
         accumulator.silence_frames = 0;
-        accumulator.frames_since_segment = 0;
+        accumulator.utterance_frames = 0;
+        accumulator.speech_frames = 0;
         info!(
-            "Utterance closed ({}): '{}'",
-            if ended_by_silence { "silence" } else { "flush timeout" },
+            "Utterance closed ({}, {:.1}s): '{}'",
+            if ended_by_silence { "silence" } else { "length cap" },
+            turn_seconds,
             utterance
         );
-        if utterance.is_empty() {
+
+        if utterance.is_empty() && !conversation {
             return None;
         }
         return Some(utterance);
@@ -231,7 +278,8 @@ pub fn reset_speech_recognizer() {
         let mut accumulator = accumulator.lock();
         accumulator.segments.clear();
         accumulator.silence_frames = 0;
-        accumulator.frames_since_segment = 0;
+        accumulator.utterance_frames = 0;
+        accumulator.speech_frames = 0;
     }
 }
 

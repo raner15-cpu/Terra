@@ -36,8 +36,8 @@ const CONVERSATION_STOP_PHRASES: &[&str] = &[
     "терра стоп",
 ];
 
-// 16 kHz mono; one voice turn is capped at 30 seconds before Whisper is called
-const MAX_UTTERANCE_SAMPLES: usize = 16_000 * 30;
+// 16 kHz mono; matches the conversation length cap in the recognizer (~1.9 MB)
+const MAX_UTTERANCE_SAMPLES: usize = 16_000 * 60;
 
 fn normalized_phrase(text: &str) -> String {
     text.to_lowercase()
@@ -162,6 +162,7 @@ fn main_loop(text_cmd_rx: Receiver<String>, rt: &tokio::runtime::Runtime) -> Res
                     // to leak into the next request.
                     stt::reset_wake_recognizer();
                     stt::reset_speech_recognizer();
+                    stt::set_conversation_endpointing(false);
                     audio_processing::reset();
                     voices::play_reply();
                     ipc::send(IpcEvent::Listening);
@@ -274,6 +275,7 @@ fn recognize_command(
                     if silence_frames > active_silence_threshold {
                         info!("Long silence detected, returning to wake word mode.");
                         if conversation_mode {
+                            stt::set_conversation_endpointing(false);
                             ipc::send(IpcEvent::ConversationModeChanged { active: false });
                         }
                         return;
@@ -359,7 +361,9 @@ fn recognize_command(
 
                     recognized_voice = recognized_voice.trim().to_string();
 
-                    if recognized_voice.is_empty() {
+                    // In a dialogue an empty Vosk result still means "turn finished":
+                    // Whisper transcribes the recorded audio instead.
+                    if recognized_voice.is_empty() && !conversation_mode {
                         continue;
                     }
 
@@ -377,9 +381,23 @@ fn recognize_command(
                         }
                         utterance_audio.clear();
 
+                        if recognized_voice.is_empty() {
+                            debug!("Empty conversation turn, keep listening.");
+                            stt::reset_speech_recognizer();
+                            vad_state = VadState::WaitingForVoice;
+                            silence_frames = 0;
+                            start = SystemTime::now();
+                            audio_buffer.clear();
+                            ipc::send(IpcEvent::ConversationStatus {
+                                status: "listening".to_string(),
+                            });
+                            continue;
+                        }
+
                         if is_conversation_stop_phrase(&recognized_voice) {
                             info!("Voice conversation ended by user");
                             conversation_history.clear();
+                            stt::set_conversation_endpointing(false);
                             ipc::send(IpcEvent::ConversationModeChanged { active: false });
                             voices::play_ok();
                             return;
@@ -461,14 +479,21 @@ fn recognize_command(
                         conversation_mode = true;
                         conversation_history.clear();
                         utterance_audio.clear();
+                        // long pauses are normal in a dialogue
+                        stt::set_conversation_endpointing(true);
                         // load Whisper lazily: only a real dialogue needs it
                         if stt::whisper::ensure_init() {
                             info!("Conversation transcription engine: Whisper");
                         } else {
+                            let reason = stt::whisper::unavailable_reason();
                             warn!(
                                 "Conversation transcription engine: Vosk (Whisper unavailable). {}",
-                                stt::whisper::unavailable_reason()
+                                reason
                             );
+                            // make it visible in the UI, not only in the log file
+                            ipc::send(IpcEvent::Error {
+                                message: format!("Whisper не активен, речь распознаёт Vosk. {reason}"),
+                            });
                         }
                         voices::play_ok();
                         ipc::send(IpcEvent::ConversationModeChanged { active: true });
@@ -530,6 +555,7 @@ fn recognize_command(
                     if silence_frames > active_silence_threshold {
                         info!("Long silence detected, returning to wake word mode.");
                         if conversation_mode {
+                            stt::set_conversation_endpointing(false);
                             ipc::send(IpcEvent::ConversationModeChanged { active: false });
                         }
                         return;
@@ -542,9 +568,6 @@ fn recognize_command(
         if let Ok(elapsed) = start.elapsed() {
             if !conversation_mode && elapsed > config::CMS_WAIT_DELAY {
                 info!("Command timeout, returning to wake word mode.");
-                if conversation_mode {
-                    ipc::send(IpcEvent::ConversationModeChanged { active: false });
-                }
                 return;
             }
         }

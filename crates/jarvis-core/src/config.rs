@@ -171,6 +171,12 @@ pub const WHISPER_EXE_NAMES: &[&str] = &[
     "main",
 ];
 pub const WHISPER_THREADS: usize = 4;
+/// Beam search is slower than greedy decoding but clearly more accurate on rare words.
+pub const WHISPER_BEAM_SIZE: usize = 5;
+/// Vocabulary hint for Whisper. Keep it short: it is prepended to every turn.
+pub const WHISPER_DEFAULT_PROMPT: &str =
+    "Разговор с голосовым помощником Террой. Возможны английские слова и названия, \
+литература, программирование, техника.";
 /// Below ~0.4 s Whisper mostly hallucinates, so the Vosk text is kept instead.
 pub const WHISPER_MIN_SAMPLES: usize = 6_400;
 /// Markers whisper.cpp emits for non-speech audio.

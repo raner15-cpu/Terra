@@ -24,6 +24,8 @@ Settings (optional, via the settings store):
 - `whisper_enabled` — `true` / `false`, default `true`
 - `whisper_model` — absolute path to a `.bin` model, overrides auto-detection
 - `whisper_exe` — absolute path to the whisper.cpp binary
+- `whisper_language` — empty = UI language, `auto` = detect per turn (mixed Russian/English speech)
+- `whisper_prompt` — vocabulary hint for rare words and terms
 
 If the binary or model is missing, Terra logs the reason once when a conversation
 starts and keeps using Vosk text, so the dialogue still works.

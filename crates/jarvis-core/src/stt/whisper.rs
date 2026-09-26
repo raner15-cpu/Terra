@@ -180,13 +180,32 @@ fn find_model() -> Option<PathBuf> {
     None
 }
 
-fn whisper_language() -> &'static str {
-    match i18n::get_language().as_str() {
-        "ru" => "ru",
-        "ua" => "uk",
-        "en" => "en",
-        _ => "auto",
+/// Language passed to whisper.cpp. `auto` lets Whisper detect the language per
+/// turn, which is what you want when Russian speech contains English words.
+fn whisper_language() -> String {
+    if let Some(configured) = setting("whisper_language") {
+        return configured;
     }
+
+    match i18n::get_language().as_str() {
+        "ru" => "ru".to_string(),
+        "ua" => "uk".to_string(),
+        "en" => "en".to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+/// Optional vocabulary hint. Whisper conditions on it, which noticeably helps with
+/// rare or domain words and keeps mixed-language speech from being over-normalized.
+fn whisper_prompt() -> Option<String> {
+    setting("whisper_prompt").or_else(|| {
+        let default = config::WHISPER_DEFAULT_PROMPT.trim();
+        if default.is_empty() {
+            None
+        } else {
+            Some(default.to_string())
+        }
+    })
 }
 
 /// Transcribe one utterance of 16 kHz mono PCM.
@@ -244,18 +263,29 @@ fn write_wav(samples: &[i16]) -> Result<PathBuf, String> {
 
 fn run_whisper(exe: &Path, model: &Path, wav_path: &Path) -> Result<String, String> {
     let threads = config::WHISPER_THREADS.to_string();
+    let beam_size = config::WHISPER_BEAM_SIZE.to_string();
+    let language = whisper_language();
 
-    let output = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("-m")
         .arg(model)
         .arg("-f")
         .arg(wav_path)
         .arg("-l")
-        .arg(whisper_language())
+        .arg(&language)
         .arg("-t")
         .arg(&threads)
+        .arg("-bs")
+        .arg(&beam_size)
         .arg("-nt") // no timestamps
-        .arg("-np") // no progress prints
+        .arg("-np"); // no progress prints
+
+    if let Some(prompt) = whisper_prompt() {
+        command.arg("--prompt").arg(prompt);
+    }
+
+    let output = command
         .output()
         .map_err(|error| format!("Не удалось запустить whisper-cli: {error}"))?;
 
