@@ -17,11 +17,25 @@ static SPEECH_ACCUMULATOR: OnceCell<Mutex<SpeechAccumulator>> = OnceCell::new();
 struct SpeechAccumulator {
     segments: Vec<String>,
     silence_frames: u32,
+    frames_since_segment: u32,
+    noise_floor: f32,
+    frames_seen: u64,
 }
 
 const SPEECH_SAMPLE_RATE: f32 = 16_000.0;
 const SPEECH_FRAME_LENGTH: f32 = 512.0;
-const UTTERANCE_END_SILENCE_SECONDS: f32 = 2.0;
+/// How long the user has to stay quiet before we treat the utterance as finished.
+const UTTERANCE_END_SILENCE_SECONDS: f32 = 0.9;
+/// Hard flush: Vosk already finalized text and nothing new arrived for this long.
+const UTTERANCE_FLUSH_SECONDS: f32 = 1.8;
+/// Absolute minimum RMS that may be treated as speech, regardless of noise floor.
+const MIN_SPEECH_RMS: f32 = 45.0;
+/// A frame counts as speech when it is this much louder than the measured noise floor.
+const NOISE_FLOOR_SPEECH_FACTOR: f32 = 2.2;
+/// Lowest noise floor estimate we allow (keeps the factor meaningful on clean mics).
+const NOISE_FLOOR_MIN: f32 = 8.0;
+/// Debug throttling: log recognizer state roughly once per second.
+const DEBUG_LOG_EVERY_FRAMES: u64 = 31;
 
 pub fn init_vosk() -> Result<(), String> {
     if VOSK_MODEL.get().is_some() {
@@ -92,43 +106,104 @@ pub fn recognize_wake_word(data: &[i16]) -> Option<(String, f32)> {
 
 
 pub fn recognize_speech(data: &[i16]) -> Option<String> {
+    recognize_speech_with_vad(data, None)
+}
+
+/// Feed one frame into the command/conversation recognizer.
+///
+/// `voice_hint` is the decision of the application VAD for the same frame. It is
+/// combined (logical OR) with an adaptive, noise-floor based detector, so a noisy
+/// microphone can no longer keep the utterance open forever. That bug made Terra
+/// react to the wake word but never return a command.
+pub fn recognize_speech_with_vad(data: &[i16], voice_hint: Option<bool>) -> Option<String> {
     let mut recognizer = SPEECH_RECOGNIZER.get()?.lock();
     let mut accumulator = SPEECH_ACCUMULATOR.get()?.lock();
 
-    if frame_rms(data) < crate::config::VAD_ENERGY_THRESHOLD {
-        accumulator.silence_frames += 1;
+    let rms = frame_rms(data);
+    accumulator.frames_seen += 1;
+
+    // adaptive noise floor: falls fast, rises slowly
+    if accumulator.noise_floor <= 0.0 {
+        accumulator.noise_floor = rms.max(NOISE_FLOOR_MIN);
+    } else if rms < accumulator.noise_floor {
+        accumulator.noise_floor = accumulator.noise_floor * 0.9 + rms * 0.1;
     } else {
+        accumulator.noise_floor = accumulator.noise_floor * 0.995 + rms * 0.005;
+    }
+    accumulator.noise_floor = accumulator.noise_floor.max(NOISE_FLOOR_MIN);
+
+    let adaptive_threshold =
+        (accumulator.noise_floor * NOISE_FLOOR_SPEECH_FACTOR).max(MIN_SPEECH_RMS);
+    let is_speech = rms >= adaptive_threshold || voice_hint.unwrap_or(false);
+
+    if is_speech {
         accumulator.silence_frames = 0;
+    } else {
+        accumulator.silence_frames += 1;
+    }
+
+    if !accumulator.segments.is_empty() {
+        accumulator.frames_since_segment += 1;
     }
 
     if let Ok(DecodingState::Finalized) = recognizer.accept_waveform(data) {
-        if let Some(text) = recognizer
-            .result()
-            .multiple()
-            .and_then(|multiple| {
-                multiple
-                    .alternatives
-                    .first()
-                    .map(|alternative| alternative.text.trim().to_string())
-            })
-        {
-            if !text.is_empty() {
+        if let Some(text) = recognizer.result().multiple().and_then(|multiple| {
+            multiple
+                .alternatives
+                .first()
+                .map(|alternative| alternative.text.trim().to_string())
+        }) {
+            if !text.is_empty() && text != "[unk]" {
+                debug!("STT segment finalized: '{}'", text);
                 accumulator.segments.push(text);
+                accumulator.frames_since_segment = 0;
             }
         }
     }
 
-    let silence_threshold =
-        ((UTTERANCE_END_SILENCE_SECONDS * SPEECH_SAMPLE_RATE) / SPEECH_FRAME_LENGTH) as u32;
+    let silence_threshold = seconds_to_frames(UTTERANCE_END_SILENCE_SECONDS);
+    let flush_threshold = seconds_to_frames(UTTERANCE_FLUSH_SECONDS);
 
-    if accumulator.silence_frames >= silence_threshold && !accumulator.segments.is_empty() {
-        let utterance = accumulator.segments.join(" ");
+    if accumulator.frames_seen % DEBUG_LOG_EVERY_FRAMES == 0 {
+        debug!(
+            "STT frame: rms={:.0} floor={:.0} thr={:.0} speech={} silence={}/{} pending_segments={} since_segment={}",
+            rms,
+            accumulator.noise_floor,
+            adaptive_threshold,
+            is_speech,
+            accumulator.silence_frames,
+            silence_threshold,
+            accumulator.segments.len(),
+            accumulator.frames_since_segment,
+        );
+    }
+
+    let ended_by_silence =
+        accumulator.silence_frames >= silence_threshold && !accumulator.segments.is_empty();
+    let ended_by_timeout =
+        accumulator.frames_since_segment >= flush_threshold && !accumulator.segments.is_empty();
+
+    if ended_by_silence || ended_by_timeout {
+        let utterance = accumulator.segments.join(" ").trim().to_string();
         accumulator.segments.clear();
         accumulator.silence_frames = 0;
-        Some(utterance)
-    } else {
-        None
+        accumulator.frames_since_segment = 0;
+        info!(
+            "Utterance closed ({}): '{}'",
+            if ended_by_silence { "silence" } else { "flush timeout" },
+            utterance
+        );
+        if utterance.is_empty() {
+            return None;
+        }
+        return Some(utterance);
     }
+
+    None
+}
+
+fn seconds_to_frames(seconds: f32) -> u32 {
+    (((seconds * SPEECH_SAMPLE_RATE) / SPEECH_FRAME_LENGTH).max(1.0)) as u32
 }
 
 fn frame_rms(data: &[i16]) -> f32 {
@@ -156,6 +231,7 @@ pub fn reset_speech_recognizer() {
         let mut accumulator = accumulator.lock();
         accumulator.segments.clear();
         accumulator.silence_frames = 0;
+        accumulator.frames_since_segment = 0;
     }
 }
 

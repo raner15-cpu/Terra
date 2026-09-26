@@ -1,5 +1,6 @@
 #[cfg(feature = "vosk")]
 mod vosk;
+pub mod whisper;
 
 use crate::config;
 use once_cell::sync::OnceCell;
@@ -8,6 +9,7 @@ use crate::config::structs::SpeechToTextEngine;
 pub use self::vosk::init_vosk;
 pub use self::vosk::recognize_wake_word;
 pub use self::vosk::recognize_speech;
+pub use self::vosk::recognize_speech_with_vad;
 pub use self::vosk::reset_speech_recognizer;
 pub use self::vosk::reset_wake_recognizer;
 
@@ -38,4 +40,9 @@ pub fn recognize(data: &[i16], include_partial: bool) -> Option<String> {
     } else {
         vosk::recognize_speech(data)
     }
+}
+
+/// Same as `recognize`, but lets the caller pass its own VAD decision for the frame.
+pub fn recognize_command_speech(data: &[i16], is_voice: bool) -> Option<String> {
+    vosk::recognize_speech_with_vad(data, Some(is_voice))
 }

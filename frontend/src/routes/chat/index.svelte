@@ -22,6 +22,7 @@
         idle: "Голосовой разговор не активен",
         listening: "Слушаю…",
         recognizing: "Распознаю речь…",
+        transcribing: "Расшифровываю через Whisper…",
         thinking: "Думаю…",
         answering: "Отвечаю…",
         error: "Ошибка разговора",

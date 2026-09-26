@@ -25,3 +25,24 @@
 - Модели Ollama — отдельное хранилище Ollama; удаление распакованного ZIP их не удалит.
 
 Для очистки старых копий закрой Terra и удали старые папки проекта. Не удаляй `%USERPROFILE%\.ollama`, если хочешь сохранить модели. Новая распакованная копия создаст собственные `node_modules` и `target`; Cargo-кэш и модели Ollama переиспользуются.
+
+## Whisper Small для режима разговора
+
+Терра распознаёт слово-активатор и команды через Vosk (быстро, по грамматике), а свободную речь в диалоге — через Whisper Small. Whisper загружается только после цепочки **«Терра» → «Да» → «Разговор»**, поэтому на обычные команды он не влияет.
+
+Установка (один раз, из корня проекта):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-whisper.ps1
+```
+
+Скрипт скачивает в `resources\whisper`:
+
+- `whisper-cli.exe` и его DLL из релиза whisper.cpp;
+- модель `ggml-small.bin` (мультиязычная, понимает русский).
+
+Можно поставить вручную: бинарник — из [релизов whisper.cpp](https://github.com/ggml-org/whisper.cpp/releases) (`whisper-bin-x64.zip`), модель — [ggml-small.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin).
+
+Настройки (необязательные): `whisper_enabled` (`true`/`false`), `whisper_model` и `whisper_exe` — свои пути к модели и бинарнику.
+
+Если бинарника или модели нет, Terra один раз напишет причину в лог при старте разговора и продолжит работать на тексте Vosk — диалог не ломается. В интерфейсе чата во время расшифровки видно состояние «Расшифровываю через Whisper…».

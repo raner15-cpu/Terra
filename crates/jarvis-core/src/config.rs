@@ -155,6 +155,33 @@ pub const VOSK_SPEECH_RECOGNIZER_MAX_ALTERNATIVES: u16 = 3;
 pub const VOSK_SPEECH_RECOGNIZER_WORDS: bool = false;
 pub const VOSK_SPEECH_PARTIAL_WORDS: bool = false;
 
+// WHISPER (conversation mode only, runs whisper.cpp as a side process)
+pub const WHISPER_PATH: &str = "resources/whisper";
+pub const WHISPER_ENABLED_BY_DEFAULT: bool = true;
+pub const WHISPER_DEFAULT_MODEL: &str = "ggml-small.bin";
+pub const WHISPER_MODEL_NAMES: &[&str] = &[
+    "ggml-small.bin",
+    "ggml-small-q5_1.bin",
+    "ggml-small-q8_0.bin",
+];
+pub const WHISPER_EXE_NAMES: &[&str] = &[
+    "whisper-cli.exe",
+    "main.exe",
+    "whisper-cli",
+    "main",
+];
+pub const WHISPER_THREADS: usize = 4;
+/// Below ~0.4 s Whisper mostly hallucinates, so the Vosk text is kept instead.
+pub const WHISPER_MIN_SAMPLES: usize = 6_400;
+/// Markers whisper.cpp emits for non-speech audio.
+pub const WHISPER_NOISE_MARKERS: &[&str] = &[
+    "[BLANK_AUDIO]",
+    "[MUSIC]",
+    "[SILENCE]",
+    "[_BEG_]",
+    "[_TT_",
+];
+
 // IRE (intents recognition)
 pub const INTENT_CLASSIFIER_MIN_CONFIDENCE: f64 = 0.75;
 

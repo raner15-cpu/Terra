@@ -35,6 +35,14 @@ pub struct Settings {
     #[serde(default)]
     pub local_llm_model: String,
 
+    // whisper (conversation mode transcription)
+    #[serde(default = "default_whisper_enabled")]
+    pub whisper_enabled: bool,
+    #[serde(default)]
+    pub whisper_model: String,
+    #[serde(default)]
+    pub whisper_exe: String,
+
     pub api_keys: ApiKeys,
 }
 
@@ -42,6 +50,7 @@ fn default_intent_backend() -> String { config::DEFAULT_INTENT_BACKEND.to_string
 fn default_slots_backend() -> String { config::DEFAULT_SLOTS_BACKEND.to_string() }
 fn default_vad_backend() -> String { config::DEFAULT_VAD_BACKEND.to_string() }
 fn default_language() -> String { crate::i18n::detect_system_language().to_string() }
+fn default_whisper_enabled() -> bool { config::WHISPER_ENABLED_BY_DEFAULT }
 
 // ### KEY-VALUE ACCESS
 
@@ -62,6 +71,9 @@ impl Settings {
             "gain_normalizer"           => Some(self.gain_normalizer.to_string()),
             "language"                  => Some(self.language.clone()),
             "local_llm_model"           => Some(self.local_llm_model.clone()),
+            "whisper_enabled"           => Some(self.whisper_enabled.to_string()),
+            "whisper_model"             => Some(self.whisper_model.clone()),
+            "whisper_exe"               => Some(self.whisper_exe.clone()),
             "api_key__picovoice"        => Some(self.api_keys.picovoice.clone()),
             "api_key__openai"           => Some(self.api_keys.openai.clone()),
             _ => None,
@@ -121,6 +133,19 @@ impl Settings {
             "local_llm_model" => {
                 self.local_llm_model = val.to_string();
             }
+            "whisper_enabled" => {
+                self.whisper_enabled = match val.to_lowercase().as_str() {
+                    "true"  => true,
+                    "false" => false,
+                    _ => return Err(format!("expected 'true' or 'false', got: '{}'", val)),
+                };
+            }
+            "whisper_model" => {
+                self.whisper_model = val.to_string();
+            }
+            "whisper_exe" => {
+                self.whisper_exe = val.to_string();
+            }
             "api_key__picovoice" => {
                 self.api_keys.picovoice = val.to_string();
             }
@@ -148,6 +173,9 @@ impl Settings {
             "gain_normalizer",
             "language",
             "local_llm_model",
+            "whisper_enabled",
+            "whisper_model",
+            "whisper_exe",
             "api_key__picovoice",
             "api_key__openai",
         ]
@@ -177,6 +205,10 @@ impl Default for Settings {
 
             language: crate::i18n::detect_system_language().to_string(),
             local_llm_model: String::new(),
+
+            whisper_enabled: config::WHISPER_ENABLED_BY_DEFAULT,
+            whisper_model: String::new(),
+            whisper_exe: String::new(),
 
             api_keys: ApiKeys {
                 picovoice: String::from(""),

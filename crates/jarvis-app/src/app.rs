@@ -36,6 +36,9 @@ const CONVERSATION_STOP_PHRASES: &[&str] = &[
     "терра стоп",
 ];
 
+// 16 kHz mono; one voice turn is capped at 30 seconds before Whisper is called
+const MAX_UTTERANCE_SAMPLES: usize = 16_000 * 30;
+
 fn normalized_phrase(text: &str) -> String {
     text.to_lowercase()
         .chars()
@@ -220,6 +223,10 @@ fn recognize_command(
     let mut first_recognition = prefed_audio;
     let mut conversation_mode = false;
     let mut conversation_history: Vec<ConversationMessage> = Vec::new();
+    // raw audio of the current voice turn, used by Whisper in conversation mode
+    let mut utterance_audio: Vec<i16> = Vec::new();
+    // an utterance can be completed while flushing the pre-roll buffer
+    let mut pending_text: Option<String> = None;
     
     // longer silence threshold for commands (user might pause to think)
     // 5 seconds
@@ -243,7 +250,15 @@ fn recognize_command(
                 if processed.is_voice {
                     // flush buffer to STT
                     for buffered_frame in audio_buffer.drain_all() {
-                        stt::recognize(&buffered_frame, false);
+                        if conversation_mode {
+                            push_utterance_audio(&mut utterance_audio, &buffered_frame);
+                        }
+                        if let Some(text) =
+                            stt::recognize_command_speech(&buffered_frame, false)
+                        {
+                            // do not lose an utterance that closed inside the pre-roll
+                            pending_text = Some(text);
+                        }
                     }
                     vad_state = VadState::VoiceActive;
                     silence_frames = 0;
@@ -267,8 +282,16 @@ fn recognize_command(
             }
             
             VadState::VoiceActive => {
-                // feed to STT
-                if let Some(mut recognized_voice) = stt::recognize(frame_buffer, false) {
+                if conversation_mode {
+                    push_utterance_audio(&mut utterance_audio, frame_buffer);
+                }
+
+                // feed to STT (our own VAD decision helps close the utterance reliably)
+                let recognized = pending_text.take().or_else(|| {
+                    stt::recognize_command_speech(frame_buffer, processed.is_voice)
+                });
+
+                if let Some(mut recognized_voice) = recognized {
                     info!("Recognized voice: {}", recognized_voice);
 
                     if conversation_mode {
@@ -341,6 +364,19 @@ fn recognize_command(
                     }
 
                     if conversation_mode {
+                        // Whisper Small gives much better free-form text than the Vosk
+                        // command model. It only runs here, inside an open dialogue.
+                        if let Some(better_text) = transcribe_with_whisper(&utterance_audio) {
+                            if better_text != recognized_voice {
+                                info!(
+                                    "Whisper replaced Vosk text: '{}' -> '{}'",
+                                    recognized_voice, better_text
+                                );
+                            }
+                            recognized_voice = better_text;
+                        }
+                        utterance_audio.clear();
+
                         if is_conversation_stop_phrase(&recognized_voice) {
                             info!("Voice conversation ended by user");
                             conversation_history.clear();
@@ -424,6 +460,16 @@ fn recognize_command(
                         info!("Voice conversation mode activated");
                         conversation_mode = true;
                         conversation_history.clear();
+                        utterance_audio.clear();
+                        // load Whisper lazily: only a real dialogue needs it
+                        if stt::whisper::ensure_init() {
+                            info!("Conversation transcription engine: Whisper");
+                        } else {
+                            warn!(
+                                "Conversation transcription engine: Vosk (Whisper unavailable). {}",
+                                stt::whisper::unavailable_reason()
+                            );
+                        }
                         voices::play_ok();
                         ipc::send(IpcEvent::ConversationModeChanged { active: true });
                         ipc::send(IpcEvent::ConversationStatus {
@@ -505,6 +551,41 @@ fn recognize_command(
     }
 }
 
+
+// Keep the raw audio of the current voice turn for Whisper, with a hard cap.
+fn push_utterance_audio(buffer: &mut Vec<i16>, frame: &[i16]) {
+    if buffer.len() >= MAX_UTTERANCE_SAMPLES {
+        return;
+    }
+    buffer.extend_from_slice(frame);
+}
+
+// Conversation mode only: re-transcribe the finished turn with Whisper Small.
+// Returns None when Whisper is unavailable or failed, so Vosk text stays in use.
+fn transcribe_with_whisper(audio: &[i16]) -> Option<String> {
+    if !stt::whisper::is_available() || audio.is_empty() {
+        return None;
+    }
+
+    ipc::send(IpcEvent::ConversationStatus {
+        status: "transcribing".to_string(),
+    });
+
+    match stt::whisper::transcribe(audio) {
+        Ok(text) => {
+            let text = text.trim().to_lowercase();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        }
+        Err(message) => {
+            warn!("Whisper failed, keeping Vosk text: {}", message);
+            None
+        }
+    }
+}
 
 fn process_text_command(text: &str, rt: &tokio::runtime::Runtime) {
     info!("Processing text command: {}", text);

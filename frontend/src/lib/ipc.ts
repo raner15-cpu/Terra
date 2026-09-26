@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 // ### IPC STORES ###
 
 export type JarvisState = "disconnected" | "idle" | "listening" | "processing"
-export type ConversationStatus = "idle" | "listening" | "recognizing" | "thinking" | "answering" | "error"
+export type ConversationStatus = "idle" | "listening" | "recognizing" | "transcribing" | "thinking" | "answering" | "error"
 
 export const jarvisState = writable<JarvisState>("disconnected")
 export const ipcConnected = writable(false)
