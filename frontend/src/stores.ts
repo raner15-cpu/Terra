@@ -10,6 +10,7 @@ export {
     lastError,
     chatMessages,
     conversationMode,
+    conversationStatus,
     connectIpc,
     enableIpc,
     disableIpc,

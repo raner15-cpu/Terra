@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 // ### IPC STORES ###
 
 export type JarvisState = "disconnected" | "idle" | "listening" | "processing"
+export type ConversationStatus = "idle" | "listening" | "recognizing" | "thinking" | "answering" | "error"
 
 export const jarvisState = writable<JarvisState>("disconnected")
 export const ipcConnected = writable(false)
@@ -14,6 +15,7 @@ export const lastError = writable("")
 export type ChatMessage = { role: "user" | "assistant"; content: string }
 export const chatMessages = writable<ChatMessage[]>([])
 export const conversationMode = writable(false)
+export const conversationStatus = writable<ConversationStatus>("idle")
 
 // ### CONNECTION ###
 
@@ -27,6 +29,7 @@ let enabled = false  // only connect when enabled
 
 export function enableIpc() {
     enabled = true
+    manualDisconnect = false
     connectIpc()
 }
 
@@ -36,7 +39,7 @@ export function disableIpc() {
 }
 
 export function connectIpc(port: number = 9712) {
-    if (ws?.readyState === WebSocket.OPEN) return
+    if (ws?.readyState === WebSocket.OPEN || ws?.readyState === WebSocket.CONNECTING) return
 
     ws = new WebSocket(`ws://127.0.0.1:${port}`)
 
@@ -48,7 +51,9 @@ export function connectIpc(port: number = 9712) {
 
     ws.onclose = () => {
         ipcConnected.set(false)
+        ws = null
         console.log("[IPC] disconnected")
+        scheduleReconnect()
     }
 
     ws.onerror = (err) => {
@@ -90,6 +95,7 @@ export function disconnectIpc() {
 
     ipcConnected.set(false)
     jarvisState.set("disconnected")
+    conversationStatus.set("idle")
 }
 
 // ### EVENT HANDLING ###
@@ -114,22 +120,53 @@ function handleEvent(data: any) {
             }
             break
 
+        case "conversation_status":
+            conversationStatus.set(data.status || "idle")
+            if (data.status === "thinking" || data.status === "listening") {
+                lastError.set("")
+            }
+            break
+
         case "conversation_mode_changed":
             conversationMode.set(Boolean(data.active))
             if (data.active) {
                 chatMessages.set([])
                 lastError.set("")
+                conversationStatus.set("listening")
                 revealWindow()
+            } else {
+                conversationStatus.set("idle")
             }
             break
 
-        case "conversation_reply":
+        case "conversation_reply_started":
+            chatMessages.update(messages => [
+                ...messages,
+                { role: "assistant", content: "" }
+            ])
+            conversationStatus.set("answering")
+            break
+
+        case "conversation_reply_chunk":
             if (data.text) {
-                chatMessages.update(messages => [
-                    ...messages,
-                    { role: "assistant", content: data.text }
-                ])
+                chatMessages.update(messages => {
+                    if (messages.length === 0) return messages
+
+                    const next = [...messages]
+                    const last = next[next.length - 1]
+                    if (last.role !== "assistant") return messages
+
+                    next[next.length - 1] = {
+                        role: "assistant",
+                        content: last.content + data.text,
+                    }
+                    return next
+                })
             }
+            break
+
+        case "conversation_reply_finished":
+            conversationStatus.set("listening")
             jarvisState.set("listening")
             break
 
@@ -143,6 +180,9 @@ function handleEvent(data: any) {
 
         case "error":
             lastError.set(data.message || "Unknown error")
+            if (get(conversationMode)) {
+                conversationStatus.set("error")
+            }
             break
 
         case "started":

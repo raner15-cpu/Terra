@@ -11,6 +11,17 @@ use crate::DB;
 static VOSK_MODEL: OnceCell<Arc<VoskModel>> = OnceCell::new();
 static WAKE_RECOGNIZER: OnceCell<Mutex<Recognizer>> = OnceCell::new();
 static SPEECH_RECOGNIZER: OnceCell<Mutex<Recognizer>> = OnceCell::new();
+static SPEECH_ACCUMULATOR: OnceCell<Mutex<SpeechAccumulator>> = OnceCell::new();
+
+#[derive(Default)]
+struct SpeechAccumulator {
+    segments: Vec<String>,
+    silence_frames: u32,
+}
+
+const SPEECH_SAMPLE_RATE: f32 = 16_000.0;
+const SPEECH_FRAME_LENGTH: f32 = 512.0;
+const UTTERANCE_END_SILENCE_SECONDS: f32 = 2.0;
 
 pub fn init_vosk() -> Result<(), String> {
     if VOSK_MODEL.get().is_some() {
@@ -47,6 +58,9 @@ pub fn init_vosk() -> Result<(), String> {
     VOSK_MODEL.set(vosk).map_err(|_| "Model already set")?;
     WAKE_RECOGNIZER.set(Mutex::new(wake_recognizer)).map_err(|_| "Wake recognizer already set")?;
     SPEECH_RECOGNIZER.set(Mutex::new(speech_recognizer)).map_err(|_| "Speech recognizer already set")?;
+    SPEECH_ACCUMULATOR
+        .set(Mutex::new(SpeechAccumulator::default()))
+        .map_err(|_| "Speech accumulator already set")?;
 
     Ok(())
 }
@@ -79,21 +93,69 @@ pub fn recognize_wake_word(data: &[i16]) -> Option<(String, f32)> {
 
 pub fn recognize_speech(data: &[i16]) -> Option<String> {
     let mut recognizer = SPEECH_RECOGNIZER.get()?.lock();
-    
-    match recognizer.accept_waveform(data) {
-        Ok(DecodingState::Finalized) => {
-            recognizer.result()
-                .multiple()
-                .and_then(|m| m.alternatives.first().map(|a| a.text.to_string()))
+    let mut accumulator = SPEECH_ACCUMULATOR.get()?.lock();
+
+    if frame_rms(data) < crate::config::VAD_ENERGY_THRESHOLD {
+        accumulator.silence_frames += 1;
+    } else {
+        accumulator.silence_frames = 0;
+    }
+
+    if let Ok(DecodingState::Finalized) = recognizer.accept_waveform(data) {
+        if let Some(text) = recognizer
+            .result()
+            .multiple()
+            .and_then(|multiple| {
+                multiple
+                    .alternatives
+                    .first()
+                    .map(|alternative| alternative.text.trim().to_string())
+            })
+        {
+            if !text.is_empty() {
+                accumulator.segments.push(text);
+            }
         }
-        _ => None,
+    }
+
+    let silence_threshold =
+        ((UTTERANCE_END_SILENCE_SECONDS * SPEECH_SAMPLE_RATE) / SPEECH_FRAME_LENGTH) as u32;
+
+    if accumulator.silence_frames >= silence_threshold && !accumulator.segments.is_empty() {
+        let utterance = accumulator.segments.join(" ");
+        accumulator.segments.clear();
+        accumulator.silence_frames = 0;
+        Some(utterance)
+    } else {
+        None
     }
 }
 
+fn frame_rms(data: &[i16]) -> f32 {
+    if data.is_empty() {
+        return 0.0;
+    }
+
+    let energy = data
+        .iter()
+        .map(|sample| {
+            let value = *sample as f64;
+            value * value
+        })
+        .sum::<f64>()
+        / data.len() as f64;
+
+    energy.sqrt() as f32
+}
 
 pub fn reset_speech_recognizer() {
     if let Some(recognizer) = SPEECH_RECOGNIZER.get() {
         recognizer.lock().reset();
+    }
+    if let Some(accumulator) = SPEECH_ACCUMULATOR.get() {
+        let mut accumulator = accumulator.lock();
+        accumulator.segments.clear();
+        accumulator.silence_frames = 0;
     }
 }
 

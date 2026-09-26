@@ -16,8 +16,13 @@ pub enum IpcEvent {
     // Voice conversation mode was entered or exited
     ConversationModeChanged { active: bool },
 
-    // Reply received from the local conversational model
-    ConversationReply { text: String, model: String },
+    // Current voice conversation phase
+    ConversationStatus { status: String },
+
+    // Streaming reply lifecycle from the local conversational model
+    ConversationReplyStarted { model: String },
+    ConversationReplyChunk { text: String },
+    ConversationReplyFinished,
     
     // Command was executed
     CommandExecuted { id: String, success: bool },

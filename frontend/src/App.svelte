@@ -10,8 +10,8 @@
         loadAppInfo,
         startStatsPolling,
         stopStatsPolling,
-        connectIpc,
-        disconnectIpc,
+        enableIpc,
+        disableIpc,
         loadTranslations
     } from "@/stores"
 
@@ -23,8 +23,9 @@
         // start process monitoring
         startStatsPolling(5000)
 
-        // connect to IPC
-        connectIpc()
+        // Keep one IPC connection alive for the whole application.
+        // Route components must not own or close this connection.
+        enableIpc()
 
         // load language
         loadTranslations()
@@ -32,7 +33,7 @@
 
     onDestroy(() => {
         stopStatsPolling()
-        disconnectIpc()
+        disableIpc()
     })
 </script>
 

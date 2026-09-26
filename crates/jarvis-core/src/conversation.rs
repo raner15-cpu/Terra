@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -48,19 +49,24 @@ struct OllamaMessage<'a> {
 }
 
 #[derive(Deserialize)]
-struct OllamaChatResponse {
-    message: OllamaReply,
+struct OllamaReply {
+    #[serde(default)]
+    content: String,
 }
 
 #[derive(Deserialize)]
-struct OllamaReply {
-    content: String,
+struct OllamaStreamResponse {
+    #[serde(default)]
+    message: Option<OllamaReply>,
+    #[serde(default)]
+    done: bool,
+    error: Option<String>,
 }
 
 fn client() -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(180))
+        .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("Не удалось создать клиент Ollama: {error}"))
 }
@@ -95,10 +101,14 @@ async fn available_models(client: &Client) -> Result<Vec<String>, String> {
     Ok(models)
 }
 
-pub async fn chat(
+pub async fn chat_stream<F>(
     preferred_model: Option<&str>,
     history: &[ConversationMessage],
-) -> Result<ConversationReply, String> {
+    mut on_chunk: F,
+) -> Result<ConversationReply, String>
+where
+    F: FnMut(&str),
+{
     if history.is_empty() {
         return Err("В голосовом диалоге пока нет сообщения.".to_string());
     }
@@ -142,7 +152,7 @@ pub async fn chat(
         .json(&OllamaChatRequest {
             model: &model,
             messages,
-            stream: false,
+            stream: true,
         })
         .send()
         .await
@@ -154,12 +164,53 @@ pub async fn chat(
         return Err(format!("Ollama вернула HTTP {status}. {details}"));
     }
 
-    let payload = response
-        .json::<OllamaChatResponse>()
-        .await
-        .map_err(|error| format!("Не удалось прочитать ответ Ollama: {error}"))?;
+    let mut stream = response.bytes_stream();
+    let mut pending = String::new();
+    let mut answer = String::new();
 
-    let text = payload.message.content.trim().to_string();
+    while let Some(item) = stream.next().await {
+        let bytes = item.map_err(|error| format!("Ошибка потока Ollama: {error}"))?;
+        pending.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(newline) = pending.find('\n') {
+            let line = pending[..newline].trim().to_string();
+            pending.drain(..=newline);
+            if line.is_empty() {
+                continue;
+            }
+
+            let payload: OllamaStreamResponse = serde_json::from_str(&line)
+                .map_err(|error| format!("Не удалось прочитать поток Ollama: {error}"))?;
+            if let Some(error) = payload.error {
+                return Err(format!("Ollama вернула ошибку: {error}"));
+            }
+            if let Some(message) = payload.message {
+                if !message.content.is_empty() {
+                    on_chunk(&message.content);
+                    answer.push_str(&message.content);
+                }
+            }
+            if payload.done {
+                break;
+            }
+        }
+    }
+
+    if !pending.trim().is_empty() {
+        let payload: OllamaStreamResponse = serde_json::from_str(pending.trim())
+            .map_err(|error| format!("Не удалось прочитать завершение потока Ollama: {error}"))?;
+        if let Some(error) = payload.error {
+            return Err(format!("Ollama вернула ошибку: {error}"));
+        }
+        if let Some(message) = payload.message {
+            if !message.content.is_empty() {
+                on_chunk(&message.content);
+                answer.push_str(&message.content);
+            }
+        }
+    }
+
+    let text = answer.trim().to_string();
     if text.is_empty() {
         return Err("Локальная модель вернула пустой ответ.".to_string());
     }

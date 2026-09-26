@@ -1,7 +1,12 @@
 <script lang="ts">
-    import { onMount, tick } from "svelte"
+    import { afterUpdate, onMount, tick } from "svelte"
     import { invoke } from "@tauri-apps/api/core"
-    import { chatMessages, conversationMode } from "@/stores"
+    import {
+        chatMessages,
+        conversationMode,
+        conversationStatus,
+        lastError,
+    } from "@/stores"
     import type { ChatMessage } from "@/lib/ipc"
 
     let models: string[] = []
@@ -13,6 +18,20 @@
     let conversation: HTMLDivElement | undefined
 
     $: canSend = Boolean(selectedModel && input.trim() && !busy)
+    $: voiceStatus = {
+        idle: "Голосовой разговор не активен",
+        listening: "Слушаю…",
+        recognizing: "Распознаю речь…",
+        thinking: "Думаю…",
+        answering: "Отвечаю…",
+        error: "Ошибка разговора",
+    }[$conversationStatus]
+
+    afterUpdate(() => {
+        if (conversation) {
+            conversation.scrollTop = conversation.scrollHeight
+        }
+    })
 
     onMount(async () => {
         try {
@@ -122,7 +141,9 @@
     </div>
 
     <p class="connection-status" class:voice-active={$conversationMode}>
-        {$conversationMode ? "Голосовой разговор активен · скажи «Закончи разговор», чтобы выйти" : status}
+        {$conversationMode
+            ? `Голосовой разговор · ${voiceStatus} · скажи «Закончи разговор», чтобы выйти`
+            : status}
     </p>
 
     <div class="messages" bind:this={conversation} aria-live="polite">
@@ -137,11 +158,13 @@
         {#each $chatMessages as message}
             <article class="message {message.role}">
                 <span class="speaker">{message.role === "user" ? "Ты" : "Терра"}</span>
-                <p>{message.content}</p>
+                <p class:thinking={!message.content}>
+                    {message.content || "Начинаю отвечать…"}
+                </p>
             </article>
         {/each}
 
-        {#if busy}
+        {#if busy || ($conversationMode && $conversationStatus === "thinking")}
             <article class="message assistant">
                 <span class="speaker">Терра</span>
                 <p class="thinking">Думаю…</p>
@@ -151,6 +174,9 @@
 
     {#if errorMessage}
         <p class="error-message" role="alert">{errorMessage}</p>
+    {/if}
+    {#if $conversationMode && $lastError}
+        <p class="error-message" role="alert">{$lastError}</p>
     {/if}
 
     <form class="composer" on:submit={submitMessage}>

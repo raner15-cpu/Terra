@@ -7,7 +7,6 @@ use jarvis_core::{
     ipc::{self, IpcEvent},
     listener, recorder, slots, stt, voices, COMMANDS_LIST, DB,
 };
-use rand::seq::SliceRandom;
 
 use crate::should_stop;
 
@@ -56,6 +55,28 @@ fn normalized_phrase(text: &str) -> String {
 fn matches_control_phrase(text: &str, phrases: &[&str]) -> bool {
     let normalized = normalized_phrase(text);
     phrases.iter().any(|phrase| normalized == *phrase)
+}
+
+fn is_conversation_stop_phrase(text: &str) -> bool {
+    let normalized = normalized_phrase(text);
+    if matches_control_phrase(&normalized, CONVERSATION_STOP_PHRASES) {
+        return true;
+    }
+
+    if matches!(normalized.as_str(), "стоп" | "отмена" | "замолчи") {
+        return true;
+    }
+
+    let has_object = normalized
+        .split_whitespace()
+        .any(|word| matches!(word, "разговор" | "диалог" | "чат"));
+    let has_stop_verb = normalized.split_whitespace().any(|word| {
+        ["заверш", "закон", "прекрат", "останов", "выйд", "закры"]
+            .iter()
+            .any(|stem| word.starts_with(stem))
+    });
+
+    has_object && has_stop_verb
 }
 
 pub fn start(text_cmd_rx: Receiver<String>, rt: &tokio::runtime::Runtime) -> Result<(), ()> {
@@ -127,28 +148,21 @@ fn main_loop(text_cmd_rx: Receiver<String>, rt: &tokio::runtime::Runtime) -> Res
             }
             
             VadState::VoiceActive => {
-                // dual-feed: speech recognizer gets frames in parallel with wake word detector
-                let _ = stt::recognize(&frame_buffer, false);
-
                 // feed to wake word detector
                 if let Some(_keyword_index) = listener::data_callback(&frame_buffer) {
                     // WAKE WORD DETECTED!
                     info!("Wake word activated!");
                     ipc::send(IpcEvent::WakeWordDetected);
-                    
+
+                    // Start command recognition from a clean buffer. Feeding normal
+                    // background speech into the command recognizer caused old words
+                    // to leak into the next request.
                     stt::reset_wake_recognizer();
+                    stt::reset_speech_recognizer();
                     audio_processing::reset();
-
-                    // brief sniff to keep feeding STT while transitioning
-                    let sniff_frames = ((0.3 * sample_rate as f32) / frame_length as f32) as u32;
-                    for _ in 0..sniff_frames {
-                        recorder::read_microphone(&mut frame_buffer);
-                        audio_processing::process(&frame_buffer);
-                        stt::recognize(&frame_buffer, false);
-                    }
-
+                    voices::play_reply();
                     ipc::send(IpcEvent::Listening);
-                    recognize_command(&mut frame_buffer, &rt, frame_length, sample_rate, true);
+                    recognize_command(&mut frame_buffer, &rt, frame_length, sample_rate, false);
 
                     // reset state after command
                     vad_state = VadState::WaitingForVoice;
@@ -256,10 +270,12 @@ fn recognize_command(
                 // feed to STT
                 if let Some(mut recognized_voice) = stt::recognize(frame_buffer, false) {
                     info!("Recognized voice: {}", recognized_voice);
-                    
-                    ipc::send(IpcEvent::SpeechRecognized {
-                        text: recognized_voice.clone(),
-                    });
+
+                    if conversation_mode {
+                        ipc::send(IpcEvent::ConversationStatus {
+                            status: "recognizing".to_string(),
+                        });
+                    }
                     
                     recognized_voice = recognized_voice.to_lowercase();
                     
@@ -319,26 +335,23 @@ fn recognize_command(
                     }
 
                     recognized_voice = recognized_voice.trim().to_string();
-                    
-                    if recognized_voice.len() < 5 {
-                        debug!("Ignoring too short recognition: '{}'", recognized_voice);
-                        continue;
-                    }
 
                     if recognized_voice.is_empty() {
                         continue;
                     }
 
                     if conversation_mode {
-                        if matches_control_phrase(&recognized_voice, CONVERSATION_STOP_PHRASES) {
+                        if is_conversation_stop_phrase(&recognized_voice) {
                             info!("Voice conversation ended by user");
-                            conversation_mode = false;
                             conversation_history.clear();
                             ipc::send(IpcEvent::ConversationModeChanged { active: false });
                             voices::play_ok();
                             return;
                         }
 
+                        ipc::send(IpcEvent::SpeechRecognized {
+                            text: recognized_voice.clone(),
+                        });
                         conversation_history.push(ConversationMessage {
                             role: "user".to_string(),
                             content: recognized_voice.clone(),
@@ -349,11 +362,28 @@ fn recognize_command(
                             .map(|db| db.read().local_llm_model.clone())
                             .unwrap_or_default();
 
-                        ipc::send(IpcEvent::Listening);
-                        match rt.block_on(conversation::chat(
+                        ipc::send(IpcEvent::ConversationStatus {
+                            status: "thinking".to_string(),
+                        });
+
+                        let mut reply_started = false;
+                        let response = rt.block_on(conversation::chat_stream(
                             Some(&preferred_model),
                             &conversation_history,
-                        )) {
+                            |chunk| {
+                                if !reply_started {
+                                    ipc::send(IpcEvent::ConversationReplyStarted {
+                                        model: preferred_model.clone(),
+                                    });
+                                    reply_started = true;
+                                }
+                                ipc::send(IpcEvent::ConversationReplyChunk {
+                                    text: chunk.to_string(),
+                                });
+                            },
+                        ));
+
+                        match response {
                             Ok(reply) => {
                                 info!(
                                     "Conversation reply received from model '{}'",
@@ -363,10 +393,12 @@ fn recognize_command(
                                     role: "assistant".to_string(),
                                     content: reply.text.clone(),
                                 });
-                                ipc::send(IpcEvent::ConversationReply {
-                                    text: reply.text,
-                                    model: reply.model,
-                                });
+                                if !reply_started {
+                                    ipc::send(IpcEvent::ConversationReplyStarted {
+                                        model: reply.model,
+                                    });
+                                }
+                                ipc::send(IpcEvent::ConversationReplyFinished);
                             }
                             Err(message) => {
                                 error!("Voice conversation error: {}", message);
@@ -381,6 +413,9 @@ fn recognize_command(
                         silence_frames = 0;
                         start = SystemTime::now();
                         audio_buffer.clear();
+                        ipc::send(IpcEvent::ConversationStatus {
+                            status: "listening".to_string(),
+                        });
                         ipc::send(IpcEvent::Listening);
                         continue;
                     }
@@ -391,6 +426,9 @@ fn recognize_command(
                         conversation_history.clear();
                         voices::play_ok();
                         ipc::send(IpcEvent::ConversationModeChanged { active: true });
+                        ipc::send(IpcEvent::ConversationStatus {
+                            status: "listening".to_string(),
+                        });
                         ipc::send(IpcEvent::RevealWindow);
 
                         stt::reset_speech_recognizer();
@@ -401,6 +439,15 @@ fn recognize_command(
                         ipc::send(IpcEvent::Listening);
                         continue;
                     }
+
+                    if recognized_voice.len() < 3 {
+                        debug!("Ignoring too short recognition: '{}'", recognized_voice);
+                        continue;
+                    }
+
+                    ipc::send(IpcEvent::SpeechRecognized {
+                        text: recognized_voice.clone(),
+                    });
                     
                     // execute command and check if we should chain
                     let should_chain = execute_command(&recognized_voice, rt);

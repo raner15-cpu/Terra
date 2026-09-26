@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy } from "svelte"
+    import { onMount } from "svelte"
     import { invoke } from "@tauri-apps/api/core"
 
     import SearchBar from "@/components/elements/SearchBar.svelte"
@@ -10,8 +10,6 @@
     import {
         isJarvisRunning,
         updateJarvisStats,
-        enableIpc,
-        disableIpc,
         translate,
         translations
     } from "@/stores"
@@ -21,25 +19,10 @@
     let processRunning = false
     let launching = false
     let assistantError = ""
-    let wasRunning = false
-
-    isJarvisRunning.subscribe((value) => {
-        processRunning = value
-        if (value) {
-            enableIpc()
-            wasRunning = true
-        } else if (wasRunning) {
-            disableIpc()
-            wasRunning = false
-        }
-    })
+    $: processRunning = $isJarvisRunning
 
     onMount(() => {
         updateJarvisStats()
-    })
-
-    onDestroy(() => {
-        disableIpc()
     })
 
     async function runAssistant() {
