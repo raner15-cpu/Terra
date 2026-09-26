@@ -8,6 +8,8 @@ export {
     lastRecognizedText,
     lastExecutedCommand,
     lastError,
+    chatMessages,
+    conversationMode,
     connectIpc,
     enableIpc,
     disableIpc,

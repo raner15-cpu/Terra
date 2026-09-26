@@ -12,6 +12,12 @@ pub enum IpcEvent {
     
     // Speech recognized
     SpeechRecognized { text: String },
+
+    // Voice conversation mode was entered or exited
+    ConversationModeChanged { active: bool },
+
+    // Reply received from the local conversational model
+    ConversationReply { text: String, model: String },
     
     // Command was executed
     CommandExecuted { id: String, success: bool },

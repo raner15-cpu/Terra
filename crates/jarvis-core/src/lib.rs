@@ -41,6 +41,9 @@ pub mod audio_processing;
 #[cfg(feature = "jarvis_app")]
 pub mod ipc;
 
+#[cfg(feature = "jarvis_app")]
+pub mod conversation;
+
 pub mod voices;
 
 pub mod audio_buffer;

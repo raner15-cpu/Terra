@@ -1,7 +1,12 @@
 use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
-use jarvis_core::{audio_buffer::AudioRingBuffer, audio_processing, commands, config, listener, recorder, stt, COMMANDS_LIST, intent, voices, ipc::{self, IpcEvent}, i18n, slots};
+use jarvis_core::{
+    audio_buffer::AudioRingBuffer, audio_processing, commands, config, conversation,
+    conversation::ConversationMessage, i18n, intent,
+    ipc::{self, IpcEvent},
+    listener, recorder, slots, stt, voices, COMMANDS_LIST, DB,
+};
 use rand::seq::SliceRandom;
 
 use crate::should_stop;
@@ -11,6 +16,46 @@ use crate::should_stop;
 enum VadState {
     WaitingForVoice,
     VoiceActive,
+}
+
+const CONVERSATION_START_PHRASES: &[&str] = &[
+    "разговор",
+    "режим разговора",
+    "начать разговор",
+    "давай поговорим",
+    "поговорим",
+    "чат",
+];
+
+const CONVERSATION_STOP_PHRASES: &[&str] = &[
+    "закончи разговор",
+    "закончить разговор",
+    "выйти из разговора",
+    "выход из разговора",
+    "хватит",
+    "стоп терра",
+    "терра стоп",
+];
+
+fn normalized_phrase(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|character| {
+            if matches!(character, '.' | ',' | '!' | '?' | ':' | ';') {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn matches_control_phrase(text: &str, phrases: &[&str]) -> bool {
+    let normalized = normalized_phrase(text);
+    phrases.iter().any(|phrase| normalized == *phrase)
 }
 
 pub fn start(text_cmd_rx: Receiver<String>, rt: &tokio::runtime::Runtime) -> Result<(), ()> {
@@ -159,10 +204,15 @@ fn recognize_command(
     let mut silence_frames: u32 = 0;
     let mut start = SystemTime::now();
     let mut first_recognition = prefed_audio;
+    let mut conversation_mode = false;
+    let mut conversation_history: Vec<ConversationMessage> = Vec::new();
     
     // longer silence threshold for commands (user might pause to think)
     // 5 seconds
     let silence_threshold: u32 = ((5.0 * sample_rate as f32) / frame_length as f32) as u32;
+    // keep a voice conversation open longer between replies
+    let conversation_silence_threshold: u32 =
+        ((60.0 * sample_rate as f32) / frame_length as f32) as u32;
     
     loop {
         if crate::should_stop() {
@@ -186,8 +236,17 @@ fn recognize_command(
                 } else {
                     silence_frames += 1;
                     
-                    if silence_frames > silence_threshold {
+                    let active_silence_threshold = if conversation_mode {
+                        conversation_silence_threshold
+                    } else {
+                        silence_threshold
+                    };
+
+                    if silence_frames > active_silence_threshold {
                         info!("Long silence detected, returning to wake word mode.");
+                        if conversation_mode {
+                            ipc::send(IpcEvent::ConversationModeChanged { active: false });
+                        }
                         return;
                     }
                 }
@@ -269,6 +328,79 @@ fn recognize_command(
                     if recognized_voice.is_empty() {
                         continue;
                     }
+
+                    if conversation_mode {
+                        if matches_control_phrase(&recognized_voice, CONVERSATION_STOP_PHRASES) {
+                            info!("Voice conversation ended by user");
+                            conversation_mode = false;
+                            conversation_history.clear();
+                            ipc::send(IpcEvent::ConversationModeChanged { active: false });
+                            voices::play_ok();
+                            return;
+                        }
+
+                        conversation_history.push(ConversationMessage {
+                            role: "user".to_string(),
+                            content: recognized_voice.clone(),
+                        });
+
+                        let preferred_model = DB
+                            .get()
+                            .map(|db| db.read().local_llm_model.clone())
+                            .unwrap_or_default();
+
+                        ipc::send(IpcEvent::Listening);
+                        match rt.block_on(conversation::chat(
+                            Some(&preferred_model),
+                            &conversation_history,
+                        )) {
+                            Ok(reply) => {
+                                info!(
+                                    "Conversation reply received from model '{}'",
+                                    reply.model
+                                );
+                                conversation_history.push(ConversationMessage {
+                                    role: "assistant".to_string(),
+                                    content: reply.text.clone(),
+                                });
+                                ipc::send(IpcEvent::ConversationReply {
+                                    text: reply.text,
+                                    model: reply.model,
+                                });
+                            }
+                            Err(message) => {
+                                error!("Voice conversation error: {}", message);
+                                conversation_history.pop();
+                                voices::play_error();
+                                ipc::send(IpcEvent::Error { message });
+                            }
+                        }
+
+                        stt::reset_speech_recognizer();
+                        vad_state = VadState::WaitingForVoice;
+                        silence_frames = 0;
+                        start = SystemTime::now();
+                        audio_buffer.clear();
+                        ipc::send(IpcEvent::Listening);
+                        continue;
+                    }
+
+                    if matches_control_phrase(&recognized_voice, CONVERSATION_START_PHRASES) {
+                        info!("Voice conversation mode activated");
+                        conversation_mode = true;
+                        conversation_history.clear();
+                        voices::play_ok();
+                        ipc::send(IpcEvent::ConversationModeChanged { active: true });
+                        ipc::send(IpcEvent::RevealWindow);
+
+                        stt::reset_speech_recognizer();
+                        vad_state = VadState::WaitingForVoice;
+                        silence_frames = 0;
+                        start = SystemTime::now();
+                        audio_buffer.clear();
+                        ipc::send(IpcEvent::Listening);
+                        continue;
+                    }
                     
                     // execute command and check if we should chain
                     let should_chain = execute_command(&recognized_voice, rt);
@@ -296,8 +428,17 @@ fn recognize_command(
                 } else {
                     silence_frames += 1;
                     
-                    if silence_frames > silence_threshold {
+                    let active_silence_threshold = if conversation_mode {
+                        conversation_silence_threshold
+                    } else {
+                        silence_threshold
+                    };
+
+                    if silence_frames > active_silence_threshold {
                         info!("Long silence detected, returning to wake word mode.");
+                        if conversation_mode {
+                            ipc::send(IpcEvent::ConversationModeChanged { active: false });
+                        }
                         return;
                     }
                 }
@@ -306,8 +447,11 @@ fn recognize_command(
         
         // timeout
         if let Ok(elapsed) = start.elapsed() {
-            if elapsed > config::CMS_WAIT_DELAY {
+            if !conversation_mode && elapsed > config::CMS_WAIT_DELAY {
                 info!("Command timeout, returning to wake word mode.");
+                if conversation_mode {
+                    ipc::send(IpcEvent::ConversationModeChanged { active: false });
+                }
                 return;
             }
         }

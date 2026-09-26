@@ -1,13 +1,11 @@
 <script lang="ts">
     import { onMount, tick } from "svelte"
     import { invoke } from "@tauri-apps/api/core"
-
-    type Role = "user" | "assistant"
-    type ChatMessage = { role: Role; content: string }
+    import { chatMessages, conversationMode } from "@/stores"
+    import type { ChatMessage } from "@/lib/ipc"
 
     let models: string[] = []
     let selectedModel = ""
-    let messages: ChatMessage[] = []
     let input = ""
     let busy = false
     let status = ""
@@ -16,8 +14,13 @@
 
     $: canSend = Boolean(selectedModel && input.trim() && !busy)
 
-    onMount(() => {
-        void loadModels()
+    onMount(async () => {
+        try {
+            selectedModel = await invoke<string>("db_read", { key: "local_llm_model" })
+        } catch {
+            selectedModel = ""
+        }
+        await loadModels()
     })
 
     async function loadModels() {
@@ -35,6 +38,7 @@
             if (!models.includes(selectedModel)) {
                 selectedModel = models[0]
             }
+            await saveSelectedModel()
             status = "Диалог работает локально. История хранится только в памяти этой страницы."
         } catch (error) {
             models = []
@@ -44,17 +48,25 @@
         }
     }
 
+    async function saveSelectedModel() {
+        if (!selectedModel) return
+        await invoke<boolean>("db_write", {
+            key: "local_llm_model",
+            val: selectedModel,
+        })
+    }
+
     async function submitMessage(event: Event) {
         event.preventDefault()
         const text = input.trim()
         if (!text || !selectedModel || busy) return
 
-        const previousMessages = messages
+        const previousMessages = $chatMessages
         const nextMessages: ChatMessage[] = [
             ...previousMessages,
             { role: "user", content: text },
         ]
-        messages = nextMessages
+        $chatMessages = nextMessages
         input = ""
         busy = true
         errorMessage = ""
@@ -64,11 +76,11 @@
                 model: selectedModel,
                 messages: nextMessages,
             })
-            messages = [...nextMessages, { role: "assistant", content: answer }]
+            $chatMessages = [...nextMessages, { role: "assistant", content: answer }]
             await tick()
             if (conversation) conversation.scrollTop = conversation.scrollHeight
         } catch (error) {
-            messages = previousMessages
+            $chatMessages = previousMessages
             input = text
             errorMessage = String(error)
         } finally {
@@ -77,7 +89,7 @@
     }
 
     function clearConversation() {
-        messages = []
+        $chatMessages = []
         errorMessage = ""
     }
 </script>
@@ -92,14 +104,14 @@
                 Пока она не открывает файлы и не выполняет команды.
             </p>
         </div>
-        <button class="clear-button" type="button" on:click={clearConversation} disabled={messages.length === 0 || busy}>
+        <button class="clear-button" type="button" on:click={clearConversation} disabled={$chatMessages.length === 0 || busy || $conversationMode}>
             Новый диалог
         </button>
     </header>
 
     <div class="model-bar">
         <label for="local-model">Локальная модель</label>
-        <select id="local-model" bind:value={selectedModel} disabled={models.length === 0 || busy}>
+        <select id="local-model" bind:value={selectedModel} on:change={saveSelectedModel} disabled={models.length === 0 || busy || $conversationMode}>
             {#each models as model}
                 <option value={model}>{model}</option>
             {/each}
@@ -109,10 +121,12 @@
         </button>
     </div>
 
-    <p class="connection-status">{status}</p>
+    <p class="connection-status" class:voice-active={$conversationMode}>
+        {$conversationMode ? "Голосовой разговор активен · скажи «Закончи разговор», чтобы выйти" : status}
+    </p>
 
     <div class="messages" bind:this={conversation} aria-live="polite">
-        {#if messages.length === 0}
+        {#if $chatMessages.length === 0}
             <div class="empty-state">
                 <div class="pulse">T</div>
                 <h2>Начни с любого вопроса</h2>
@@ -120,7 +134,7 @@
             </div>
         {/if}
 
-        {#each messages as message}
+        {#each $chatMessages as message}
             <article class="message {message.role}">
                 <span class="speaker">{message.role === "user" ? "Ты" : "Терра"}</span>
                 <p>{message.content}</p>
@@ -145,7 +159,7 @@
             placeholder={models.length ? "Напиши Терре…" : "Сначала запусти Ollama и установи модель"}
             rows="2"
             maxlength="12000"
-            disabled={!selectedModel || busy}
+            disabled={!selectedModel || busy || $conversationMode}
             on:keydown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault()
@@ -153,7 +167,7 @@
                 }
             }}
         ></textarea>
-        <button type="submit" disabled={!canSend}>{busy ? "…" : "Отправить"}</button>
+        <button type="submit" disabled={!canSend || $conversationMode}>{busy ? "…" : "Отправить"}</button>
         <small>Enter — отправить · Shift+Enter — новая строка</small>
     </form>
 </section>

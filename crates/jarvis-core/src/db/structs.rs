@@ -32,6 +32,9 @@ pub struct Settings {
     #[serde(default = "default_language")]
     pub language: String,
 
+    #[serde(default)]
+    pub local_llm_model: String,
+
     pub api_keys: ApiKeys,
 }
 
@@ -58,6 +61,7 @@ impl Settings {
             "noise_suppression"         => Some(format!("{:?}", self.noise_suppression)),
             "gain_normalizer"           => Some(self.gain_normalizer.to_string()),
             "language"                  => Some(self.language.clone()),
+            "local_llm_model"           => Some(self.local_llm_model.clone()),
             "api_key__picovoice"        => Some(self.api_keys.picovoice.clone()),
             "api_key__openai"           => Some(self.api_keys.openai.clone()),
             _ => None,
@@ -114,6 +118,9 @@ impl Settings {
             "language" => {
                 self.language = val.to_string();
             }
+            "local_llm_model" => {
+                self.local_llm_model = val.to_string();
+            }
             "api_key__picovoice" => {
                 self.api_keys.picovoice = val.to_string();
             }
@@ -140,6 +147,7 @@ impl Settings {
             "noise_suppression",
             "gain_normalizer",
             "language",
+            "local_llm_model",
             "api_key__picovoice",
             "api_key__openai",
         ]
@@ -168,6 +176,7 @@ impl Default for Settings {
             gain_normalizer: config::DEFAULT_GAIN_NORMALIZER,
 
             language: crate::i18n::detect_system_language().to_string(),
+            local_llm_model: String::new(),
 
             api_keys: ApiKeys {
                 picovoice: String::from(""),

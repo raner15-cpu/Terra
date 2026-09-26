@@ -47,6 +47,11 @@ copy /Y "lib\windows\amd64\*.dll" "target\debug\" >nul
 if errorlevel 1 goto :failed
 if not exist "target\debug\libvosk.dll" goto :failed
 
+echo Synchronizing Terra commands, voices and models...
+if exist "target\debug\resources" rmdir /S /Q "target\debug\resources"
+xcopy /E /I /Y "resources" "target\debug\resources" >nul
+if errorlevel 1 goto :failed
+
 echo Starting Terra. Keep this window open while using the app.
 pushd "crates\jarvis-gui"
 cargo tauri dev

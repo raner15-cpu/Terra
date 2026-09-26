@@ -11,6 +11,9 @@ export const ipcConnected = writable(false)
 export const lastRecognizedText = writable("")
 export const lastExecutedCommand = writable("")
 export const lastError = writable("")
+export type ChatMessage = { role: "user" | "assistant"; content: string }
+export const chatMessages = writable<ChatMessage[]>([])
+export const conversationMode = writable(false)
 
 // ### CONNECTION ###
 
@@ -103,6 +106,31 @@ function handleEvent(data: any) {
         case "speech_recognized":
             lastRecognizedText.set(data.text || "")
             jarvisState.set("processing")
+            if (get(conversationMode) && data.text) {
+                chatMessages.update(messages => [
+                    ...messages,
+                    { role: "user", content: data.text }
+                ])
+            }
+            break
+
+        case "conversation_mode_changed":
+            conversationMode.set(Boolean(data.active))
+            if (data.active) {
+                chatMessages.set([])
+                lastError.set("")
+                revealWindow()
+            }
+            break
+
+        case "conversation_reply":
+            if (data.text) {
+                chatMessages.update(messages => [
+                    ...messages,
+                    { role: "assistant", content: data.text }
+                ])
+            }
+            jarvisState.set("listening")
             break
 
         case "command_executed":
