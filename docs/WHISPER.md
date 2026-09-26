@@ -1,0 +1,51 @@
+# Whisper в разговорном режиме
+
+Терра распознаёт слово-активатор и команды через Vosk, а свободную речь в диалоге — через Whisper Small. Whisper загружается только после цепочки **«Терра» → «Да» → «Разговор»**.
+
+## Ничего делать не нужно
+
+`Start-Terra.bat` при первом запуске сам скачивает Whisper в постоянную папку **вне проекта**:
+
+```
+%LOCALAPPDATA%\Terra\whisper
+```
+
+Папка не удаляется при обновлении проекта, поэтому при следующем ZIP-обновлении модель уже на месте и повторно не качается (~500 МБ один раз).
+
+## Полезные переменные окружения
+
+| Переменная | Что делает |
+| --- | --- |
+| `TERRA_WHISPER_DIR` | Своя папка для бинарника и модели. Ставь её, чтобы держать модель, например, на другом диске. |
+| `TERRA_SKIP_WHISPER=1` | Пропустить проверку и установку Whisper при запуске. Терра будет работать на тексте Vosk. |
+| `TERRA_WHISPER_MODEL` | Имя ggml-модели, по умолчанию `ggml-small.bin`. |
+
+Пример запуска с моделью на другом диске:
+
+```bat
+set TERRA_WHISPER_DIR=D:\TerraModels\whisper
+Start-Terra.bat
+```
+
+## Ручная установка (если нет интернета на машине сборки)
+
+Положи в папку из таблицы выше:
+
+- `whisper-cli.exe` и его DLL из [релиза whisper.cpp](https://github.com/ggml-org/whisper.cpp/releases) (`whisper-bin-x64.zip`);
+- модель [ggml-small.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin).
+
+Или запусти установщик отдельно:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-whisper.ps1
+powershell -ExecutionPolicy Bypass -File scripts\setup-whisper.ps1 -Target "D:\TerraModels\whisper"
+```
+
+## Настройки в приложении
+
+- `whisper_enabled` — `true`/`false`;
+- `whisper_model`, `whisper_exe` — абсолютные пути, перебивают автопоиск;
+- `whisper_language` — пусто = язык интерфейса, `auto` = определять язык каждой реплики (нужно для английских слов в русской речи);
+- `whisper_prompt` — подсказка со словарём для редких слов и терминов.
+
+Если бинарника или модели нет, Terra один раз покажет причину при старте разговора и продолжит работать на тексте Vosk — диалог не ломается.

@@ -44,10 +44,10 @@ pub fn unavailable_reason() -> String {
     }
 
     format!(
-        "Не найден whisper-cli или модель. Ожидаемые пути: '{}' и '{}'. \
-Запусти scripts/setup-whisper.ps1, чтобы скачать Whisper Small.",
-        default_exe_dir().join(config::WHISPER_EXE_NAMES[0]).display(),
-        default_exe_dir().join(config::WHISPER_DEFAULT_MODEL).display(),
+        "Не найден whisper-cli или модель в '{}'. \
+Перезапусти Start-Terra.bat: он скачивает Whisper автоматически. \
+Папка не удаляется при обновлении проекта.",
+        default_exe_dir().display(),
     )
 }
 
@@ -57,13 +57,39 @@ fn whisper_enabled() -> bool {
         .unwrap_or(config::WHISPER_ENABLED_BY_DEFAULT)
 }
 
-fn default_exe_dir() -> PathBuf {
+/// Where Whisper is expected to live: a persistent folder OUTSIDE the project, so
+/// that deleting and re-downloading the project does not delete a 500 MB model.
+/// `Start-Terra.bat` uses the same location and exports `TERRA_WHISPER_DIR`.
+pub fn default_exe_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os(config::WHISPER_DIR_ENV) {
+        let dir = PathBuf::from(dir);
+        if !dir.as_os_str().is_empty() {
+            return dir;
+        }
+    }
+
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data)
+            .join(config::WHISPER_USER_DIR_NAME)
+            .join("whisper");
+    }
+
+    if let Some(dirs) = crate::APP_DIRS.get() {
+        return dirs.data_dir.join("whisper");
+    }
+
     APP_DIR.join(config::WHISPER_PATH)
 }
 
 fn candidate_dirs() -> Vec<PathBuf> {
     let mut roots = vec![default_exe_dir()];
-    // running via `cargo run` puts APP_DIR into target/debug, so also look at the CWD
+
+    if let Some(dirs) = crate::APP_DIRS.get() {
+        roots.push(dirs.data_dir.join("whisper"));
+    }
+
+    // legacy / portable locations inside the project
+    roots.push(APP_DIR.join(config::WHISPER_PATH));
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd.join(config::WHISPER_PATH));
     }
@@ -71,6 +97,9 @@ fn candidate_dirs() -> Vec<PathBuf> {
     // whisper.cpp archives sometimes keep the binary in a subfolder
     let mut dirs = Vec::with_capacity(roots.len() * 3);
     for root in roots {
+        if dirs.contains(&root) {
+            continue;
+        }
         dirs.push(root.join("Release"));
         dirs.push(root.join("bin"));
         dirs.push(root);
@@ -152,8 +181,17 @@ fn find_exe() -> Option<PathBuf> {
 }
 
 fn find_model() -> Option<PathBuf> {
+    // an explicit model name from the environment wins (same value the launcher uses)
+    let preferred: Vec<String> = std::env::var(config::WHISPER_MODEL_ENV)
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .into_iter()
+        .chain(config::WHISPER_MODEL_NAMES.iter().map(|name| name.to_string()))
+        .collect();
+
     for dir in candidate_dirs() {
-        for name in config::WHISPER_MODEL_NAMES {
+        for name in &preferred {
             let candidate = dir.join(name);
             if candidate.is_file() {
                 return Some(candidate);

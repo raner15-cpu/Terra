@@ -157,6 +157,10 @@ pub const VOSK_SPEECH_PARTIAL_WORDS: bool = false;
 
 // WHISPER (conversation mode only, runs whisper.cpp as a side process)
 pub const WHISPER_PATH: &str = "resources/whisper";
+/// Persistent location outside the project: %LOCALAPPDATA%\Terra\whisper
+pub const WHISPER_USER_DIR_NAME: &str = "Terra";
+pub const WHISPER_DIR_ENV: &str = "TERRA_WHISPER_DIR";
+pub const WHISPER_MODEL_ENV: &str = "TERRA_WHISPER_MODEL";
 pub const WHISPER_ENABLED_BY_DEFAULT: bool = true;
 pub const WHISPER_DEFAULT_MODEL: &str = "ggml-small.bin";
 pub const WHISPER_MODEL_NAMES: &[&str] = &[

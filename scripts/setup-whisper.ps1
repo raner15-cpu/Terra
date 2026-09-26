@@ -1,42 +1,48 @@
-# Downloads whisper.cpp (Windows x64) and the multilingual Whisper Small model
-# into resources/whisper. Terra uses them only in conversation mode.
+# Installs whisper.cpp (Windows x64) and a multilingual Whisper model into a
+# PERSISTENT folder outside the project, so updating/re-downloading the project
+# never deletes the model.
 #
+# Called automatically by Start-Terra.bat. Manual use:
 #   powershell -ExecutionPolicy Bypass -File scripts\setup-whisper.ps1
-#
-# Optional: -Model ggml-small-q5_1.bin   (smaller / faster, slightly worse)
+#   powershell -ExecutionPolicy Bypass -File scripts\setup-whisper.ps1 -Target "D:\TerraModels\whisper"
 
 param(
-    [string]$Model = "ggml-small.bin"
+    [string]$Target = "",
+    [string]$Model = ""
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$root = Split-Path -Parent $PSScriptRoot
-$target = Join-Path $root "resources\whisper"
-New-Item -ItemType Directory -Force -Path $target | Out-Null
+if (-not $Target) { $Target = $env:TERRA_WHISPER_DIR }
+if (-not $Target) { $Target = Join-Path $env:LOCALAPPDATA "Terra\whisper" }
+if (-not $Model)  { $Model  = $env:TERRA_WHISPER_MODEL }
+if (-not $Model)  { $Model  = "ggml-small.bin" }
 
-$modelPath = Join-Path $target $Model
+New-Item -ItemType Directory -Force -Path $Target | Out-Null
+Write-Host "Whisper folder: $Target"
+
+$modelPath = Join-Path $Target $Model
 if (Test-Path $modelPath) {
-    Write-Host "Model already present: $modelPath"
+    Write-Host "Model already installed: $Model"
 } else {
-    $modelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$Model"
-    Write-Host "Downloading $Model (about 500 MB for small)..."
-    Invoke-WebRequest -Uri $modelUrl -OutFile $modelPath
+    Write-Host "Downloading $Model (about 500 MB, one time only)..."
+    Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$Model" -OutFile "$modelPath.part"
+    Move-Item -Force "$modelPath.part" $modelPath
 }
 
-$exe = Get-ChildItem -Path $target -Filter "*.exe" -ErrorAction SilentlyContinue |
+$exe = Get-ChildItem -Path $Target -Filter "*.exe" -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -in @("whisper-cli.exe", "main.exe") } |
     Select-Object -First 1
 
 if ($exe) {
-    Write-Host "whisper.cpp binary already present: $($exe.FullName)"
+    Write-Host "whisper.cpp already installed: $($exe.Name)"
 } else {
-    Write-Host "Downloading whisper.cpp Windows binaries..."
+    Write-Host "Downloading whisper.cpp binaries..."
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest" -Headers @{ "User-Agent" = "terra-setup" }
     $asset = $release.assets | Where-Object { $_.name -like "*bin-x64*.zip" } | Select-Object -First 1
     if (-not $asset) {
-        throw "Could not find a Windows x64 archive in the latest whisper.cpp release. Download whisper-cli.exe manually into $target"
+        throw "No Windows x64 archive in the latest whisper.cpp release. Put whisper-cli.exe into $Target manually."
     }
 
     $zip = Join-Path $env:TEMP $asset.name
@@ -45,14 +51,12 @@ if ($exe) {
     if (Test-Path $unpacked) { Remove-Item -Recurse -Force $unpacked }
     Expand-Archive -Path $zip -DestinationPath $unpacked
 
-    # flatten: Terra expects the binary and its DLLs directly in resources\whisper
+    # flatten: Terra expects the binary and its DLLs directly in the target folder
     Get-ChildItem -Path $unpacked -Recurse -Include *.exe, *.dll | ForEach-Object {
-        Copy-Item $_.FullName -Destination $target -Force
+        Copy-Item $_.FullName -Destination $Target -Force
     }
     Remove-Item -Recurse -Force $unpacked
     Remove-Item -Force $zip
 }
 
-Write-Host ""
-Write-Host "Whisper is ready in $target"
-Write-Host "Terra loads it the first time you say: Terra -> Da -> Razgovor"
+Write-Host "Whisper is ready. Terra loads it when you say: Terra -> Da -> Razgovor"

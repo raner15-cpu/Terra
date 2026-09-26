@@ -7,6 +7,11 @@ set "TEMP=%LOCALAPPDATA%\Temp"
 set "TMP=%TEMP%"
 if not exist "%TEMP%" mkdir "%TEMP%"
 
+rem Whisper lives outside the project so project updates never delete the model.
+if not defined TERRA_WHISPER_DIR set "TERRA_WHISPER_DIR=%LOCALAPPDATA%\Terra\whisper"
+if not defined TERRA_WHISPER_MODEL set "TERRA_WHISPER_MODEL=ggml-small.bin"
+if not exist "%TERRA_WHISPER_DIR%" mkdir "%TERRA_WHISPER_DIR%" 2>nul
+
 where node >nul 2>&1 || goto :need_node
 where npm.cmd >nul 2>&1 || goto :need_node
 where cargo >nul 2>&1 || goto :need_rust
@@ -26,6 +31,20 @@ if errorlevel 1 (
   cargo install tauri-cli --version "^2.0.0" --locked
   if errorlevel 1 goto :failed
 )
+
+if "%TERRA_SKIP_WHISPER%"=="1" goto :whisper_ready
+if exist "%TERRA_WHISPER_DIR%\%TERRA_WHISPER_MODEL%" if exist "%TERRA_WHISPER_DIR%\whisper-cli.exe" goto :whisper_ready
+if exist "%TERRA_WHISPER_DIR%\%TERRA_WHISPER_MODEL%" if exist "%TERRA_WHISPER_DIR%\main.exe" goto :whisper_ready
+echo Installing Whisper for conversation mode into "%TERRA_WHISPER_DIR%"...
+echo This is a one-time download of about 500 MB and it is kept outside the project.
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\setup-whisper.ps1"
+if errorlevel 1 (
+  echo.
+  echo Whisper setup failed. Terra will still start and use Vosk text in conversations.
+  echo You can retry later, or set TERRA_SKIP_WHISPER=1 to skip this step.
+  echo.
+)
+:whisper_ready
 
 echo Generating Terra application icon...
 pushd "crates\jarvis-gui"
